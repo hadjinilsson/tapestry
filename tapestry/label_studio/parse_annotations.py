@@ -84,8 +84,8 @@ def parse_annotations(output_dir: Path, min_group_size: int | None = None):
 
     yaml_path = output_dir / "data.yaml"
     with open(yaml_path, "w") as f:
-        f.write(f"train: {output_dir}/images/train\n")
-        f.write(f"val: {output_dir}/images/val\n\n")
+        f.write(f"train: {output_dir.resolve()}/images/train\n")
+        f.write(f"val: {output_dir.resolve()}/images/val\n\n")
         f.write(f"nc: {len(label_names)}\n")
         f.write("names: [")
         f.write(", ".join([f"'{name}'" for name in label_names]))
