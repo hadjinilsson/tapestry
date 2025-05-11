@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+venv/
+.yolo-env/
+env/
+*.ipynb_checkpoints
+
+# Dotenv and secrets
+.env
+.env.*
+
+# YOLO output
+runs/
+weights/
+*.pt
+
+# Data
+*.csv
+*.parquet
+*.json
+*.zip
+*.tar.gz
+
+# Data
+data/
+
+# Logs and checkpoints
+*.log
+*.ckpt
+
+# System/IDE clutter
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.bak
