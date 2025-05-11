@@ -21,7 +21,7 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     model = YOLO(model_type)
     results = model.train(
-        data=str(DATA_YAML_PATH),
+        data=str(DATA_YAML_PATH.resolve()),
         epochs=epochs,
         imgsz=imgsz,
         project=str(output_dir.parent),
