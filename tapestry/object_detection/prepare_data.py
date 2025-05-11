@@ -11,9 +11,9 @@ LABEL_JSON_DIR = DATA_ROOT / "labels_json"
 BATCH_SIZE = 1000
 
 # ─────────────── TRAINING MODE ───────────────
-def run_training_mode():
+def run_training_mode(min_group_size: int | None):
     print("🧠 Running in training mode...")
-    split_map = parse_annotations(DATA_ROOT, min_group_size=None)  # or set int for aggregation
+    split_map = parse_annotations(DATA_ROOT, min_group_size=min_group_size)  # or set int for aggregation
     for image_stub, split in split_map.items():
         img_path = IMAGE_DIR / split / f"{image_stub}.png"
         json_path = LABEL_JSON_DIR / split / f"{image_stub}.json"
@@ -45,10 +45,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["train", "infer"], required=True)
     parser.add_argument("--base-network", help="Required for inference mode")
+    parser.add_argument("--aggregation", type=int, help="Minimum group size for label aggregation (omit to disable)")
     args = parser.parse_args()
 
     if args.mode == "train":
-        run_training_mode()
+        run_training_mode(min_group_size=args.aggregation)
     elif args.mode == "infer":
         if not args.base_network:
             raise ValueError("--base-network is required in inference mode")
