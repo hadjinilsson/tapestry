@@ -12,7 +12,7 @@ load_dotenv()
 AWS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.getenv("AWS_SECRET_ACCESS_KEY")
 S3_ENDPOINT = os.getenv("AWS_S3_ENDPOINT")
-BUCKET_NAME_IMAGES = os.getenv("BUCKET_NAME_IMAGES")
+BUCKET_NAME_IMAGES = os.getenv("BUCKET_NAME_IMAGERY")
 
 # ─────────────────────────────────────────────
 # UTILITY: Key construction
