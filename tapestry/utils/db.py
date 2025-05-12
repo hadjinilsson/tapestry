@@ -29,7 +29,8 @@ def get_camera_points_for_annotated_link_segments() -> list[str]:
         SELECT DISTINCT camera_point_id
         FROM basenetwork_linksegment
         WHERE annotated = 'Y'
-          AND camera_point_id IS NOT NULL;
+          AND camera_point_id IS NOT NULL
+        LIMIT 200;
     """
 
     with psycopg2.connect(DB_URL, cursor_factory=RealDictCursor) as conn:
