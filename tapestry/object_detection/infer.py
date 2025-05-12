@@ -113,7 +113,7 @@ def main():
     group.add_argument("--camera-point-list", help="Path to .txt file with one camera_point_id per line")
     group.add_argument("--use-annotated-link-segments", action="store_true")
     parser.add_argument("--batch-size", type=int, default=250)
-    parser.add_argument("--upload", action="store_true")
+    parser.add_argument("--no-upload", action="store_true", help="Disable S3 upload")
     parser.add_argument("--s3-prefix", default="object_detection")
     args = parser.parse_args()
 
@@ -137,7 +137,7 @@ def main():
 
     for base_network, ids in grouped.items():
         output_file = run_inference(checkpoint_path, args.run_id, base_network, ids, args.batch_size)
-        if args.upload:
+        if not args.no_upload:
             upload_to_s3(output_file, f"{args.s3_prefix}/{args.run_id}")
 
 if __name__ == "__main__":
