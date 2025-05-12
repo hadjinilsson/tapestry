@@ -8,6 +8,7 @@ from ultralytics import YOLO
 from tapestry.utils.image_fetching import download_image
 from tapestry.utils.db import get_camera_point_ids, get_camera_points_for_annotated_link_segments
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 
 load_dotenv()
@@ -31,10 +32,19 @@ def download_checkpoint(run_id: str, local_path: Path):
     print(f"✅ Model checkpoint downloaded to {local_path}")
 
 # ─────────────── DOWNLOAD IMAGES ───────────────
-def download_image_batch(camera_ids: list[str]):
-    for cp_id in camera_ids:
-        img_path = TEMP_BATCH_DIR / f"{cp_id}.png"
+def download_one(cp_id: str):
+    img_path = TEMP_BATCH_DIR / f"{cp_id}.png"
+    if not img_path.exists():
         download_image(cp_id, dest_image_path=img_path)
+
+def download_image_batch(camera_ids: list[str], max_workers: int = 10):
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(download_one, cp_id) for cp_id in camera_ids]
+        for i, future in enumerate(as_completed(futures), 1):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"⚠️ Failed to download image {camera_ids[i-1]}: {e}")
 
 # ─────────────── RUN INFERENCE ───────────────
 def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: list[str], batch_size: int):
