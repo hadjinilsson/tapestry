@@ -59,27 +59,31 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
         download_image_batch(batch)
         image_paths = [TEMP_BATCH_DIR / f"{cp_id}.png" for cp_id in batch if (TEMP_BATCH_DIR / f"{cp_id}.png").exists()]
 
-        # Run inference
-        results = model.predict(image_paths, save=False, verbose=False)
+        try:
 
-        for cp_id, result in zip(batch, results):
-            for box in result.boxes:
-                cls = int(box.cls.item())
-                conf = float(box.conf.item())
-                xywh = box.xywh[0].tolist()
-                all_preds.append({
-                    "camera_point_id": cp_id,
-                    "class": cls,
-                    "confidence": conf,
-                    "x_center": xywh[0],
-                    "y_center": xywh[1],
-                    "width": xywh[2],
-                    "height": xywh[3],
-                })
+            # Run inference
+            results = model.predict(image_paths, save=False, verbose=False)
 
-        # Clean up
-        for img_path in TEMP_BATCH_DIR.glob("*.png"):
-            img_path.unlink(missing_ok=True)
+            for cp_id, result in zip(batch, results):
+                for box in result.boxes:
+                    cls = int(box.cls.item())
+                    conf = float(box.conf.item())
+                    xywh = box.xywh[0].tolist()
+                    all_preds.append({
+                        "camera_point_id": cp_id,
+                        "class": cls,
+                        "confidence": conf,
+                        "x_center": xywh[0],
+                        "y_center": xywh[1],
+                        "width": xywh[2],
+                        "height": xywh[3],
+                    })
+
+        finally:
+
+            # Clean up
+            for img_path in TEMP_BATCH_DIR.glob("*.png"):
+                img_path.unlink(missing_ok=True)
 
     output_dir = Path("predictions") / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -103,7 +107,7 @@ def main():
     group.add_argument("--base-network")
     group.add_argument("--camera-point-list", help="Path to .txt file with one camera_point_id per line")
     group.add_argument("--use-annotated-link-segments", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=1000)
+    parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--upload", action="store_true")
     parser.add_argument("--s3-prefix", default="object_detection")
     args = parser.parse_args()
