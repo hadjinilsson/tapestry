@@ -9,7 +9,7 @@ from tapestry.utils.image_fetching import download_image
 from tapestry.utils.db import get_camera_point_ids, get_camera_points_for_annotated_link_segments
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import shutil
+from tqdm import tqdm
 
 load_dotenv()
 
