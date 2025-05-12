@@ -56,9 +56,8 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
         for i in range(0, len(camera_ids), batch_size)
     ]
 
-    for batch in tqdm(batches, desc=f"🔍 Inference on {base_network}", unit="batch"):
-        batch = camera_ids[i:i + batch_size]
-        print(f"📦 Processing batch {i // batch_size + 1} ({len(batch)} images)...")
+    for batch_idx, batch in enumerate(tqdm(batches, desc=f"🔍 Inference on {base_network}", unit="batch"), 1):
+        print(f"📦 Processing batch {batch_idx} ({len(batch)} images)...")
 
         # Download batch
         download_image_batch(batch)
