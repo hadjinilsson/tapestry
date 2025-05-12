@@ -11,7 +11,7 @@ load_dotenv()
 # ─────────────── CONFIG ───────────────
 DATA_YAML_PATH = Path("data/data.yaml")
 DEFAULT_OUTPUT_DIR = Path("runs/object_detection")
-S3_BUCKET = os.getenv("MODELS_BUCKET_NAME")
+S3_BUCKET = os.getenv("BUCKET_NAME_MODELS")
 S3_ENDPOINT = os.getenv("AWS_S3_ENDPOINT")
 AWS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--upload", action="store_true", help="Upload run to S3")
-    parser.add_argument("--s3-prefix", default="object_detection_runs")
+    parser.add_argument("--s3-prefix", default="object_detection")
     args = parser.parse_args()
 
     run_id, run_dir = train(args.model, args.epochs, args.imgsz, DEFAULT_OUTPUT_DIR)

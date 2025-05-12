@@ -22,3 +22,18 @@ def get_camera_point_ids(base_network_id: str) -> list[str]:
             cur.execute(query, (base_network_id,))
             rows = cur.fetchall()
             return [row["camera_point_id"] for row in rows]
+
+
+def get_camera_points_for_annotated_link_segments() -> list[str]:
+    query = """
+        SELECT DISTINCT camera_point_id
+        FROM basenetwork_linksegment
+        WHERE annotated = 'Y'
+          AND camera_point_id IS NOT NULL;
+    """
+
+    with psycopg2.connect(DB_URL, cursor_factory=RealDictCursor) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+            return [row["camera_point_id"] for row in rows]
