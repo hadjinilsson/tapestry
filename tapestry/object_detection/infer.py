@@ -6,30 +6,18 @@ import pandas as pd
 from dotenv import load_dotenv
 from ultralytics import YOLO
 from tapestry.utils.image_fetching import download_image
-from tapestry.utils.db import get_camera_point_ids, get_camera_points_for_annotated_link_segments
+from tapestry.utils.db import get_camera_point_ids_for_base_network, get_camera_point_ids_for_annotated_link_segments
+from tapestry.utils.s3 import download_dir_from_s3, upload_file_to_s3
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 load_dotenv()
 
-# S3 config
 S3_BUCKET_MODELS = os.getenv("BUCKET_NAME_MODELS")
 S3_BUCKET_PREDICTIONS = os.getenv("BUCKET_NAME_PREDICTIONS")
-S3_ENDPOINT = os.getenv("AWS_S3_ENDPOINT")
-AWS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET = os.getenv("AWS_SECRET_ACCESS_KEY")
-
 TEMP_BATCH_DIR = Path("data/images/temp_infer_batch")
 TEMP_BATCH_DIR.mkdir(parents=True, exist_ok=True)
-
-# ─────────────── DOWNLOAD MODEL CHECKPOINT ───────────────
-def download_checkpoint(run_id: str, local_path: Path):
-    s3_key = f"object_detection/{run_id}/weights/best.pt"
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    s3 = boto3.client("s3", endpoint_url=S3_ENDPOINT, aws_access_key_id=AWS_KEY, aws_secret_access_key=AWS_SECRET)
-    s3.download_file(S3_BUCKET_MODELS, s3_key, str(local_path))
-    print(f"✅ Model checkpoint downloaded to {local_path}")
 
 # ─────────────── DOWNLOAD IMAGES ───────────────
 def download_one(cp_id: str):
@@ -96,13 +84,6 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
     print(f"✅ Saved predictions to {out_path}")
     return out_path
 
-# ─────────────── UPLOAD TO S3 ───────────────
-def upload_to_s3(local_file: Path, s3_prefix: str):
-    s3 = boto3.client("s3", endpoint_url=S3_ENDPOINT, aws_access_key_id=AWS_KEY, aws_secret_access_key=AWS_SECRET)
-    s3_key = f"{s3_prefix}/{local_file.name}"
-    s3.upload_file(str(local_file), S3_BUCKET_PREDICTIONS, s3_key)
-    print(f"☁️ Uploaded prediction: {s3_key}")
-
 # ─────────────── ENTRY ───────────────
 def main():
     parser = argparse.ArgumentParser()
@@ -118,15 +99,20 @@ def main():
 
     checkpoint_path = Path("checkpoints") / args.run_id / "best.pt"
     if not checkpoint_path.exists():
-        download_checkpoint(args.run_id, checkpoint_path)
+        print(f"⬇️ Downloading checkpoint for run {args.run_id}...")
+        download_dir_from_s3(
+            s3_prefix=f"object_detection/{args.run_id}/weights",
+            local_dir=checkpoint_path.parent,
+            bucket=S3_BUCKET_MODELS,
+        )
 
     if args.use_annotated_link_segments:
-        camera_ids = get_camera_points_for_annotated_link_segments()
+        camera_ids = get_camera_point_ids_for_annotated_link_segments()
     elif args.camera_point_list:
         with open(args.camera_point_list) as f:
             camera_ids = [line.strip() for line in f if line.strip()]
     else:
-        camera_ids = get_camera_point_ids(args.base_network)
+        camera_ids = get_camera_point_ids_for_base_network(args.base_network)
 
     # Group camera points by base network prefix
     grouped = defaultdict(list)
@@ -137,7 +123,8 @@ def main():
     for base_network, ids in grouped.items():
         output_file = run_inference(checkpoint_path, args.run_id, base_network, ids, args.batch_size)
         if not args.no_upload:
-            upload_to_s3(output_file, f"{args.s3_prefix}/{args.run_id}")
+            s3_key = f"{args.s3_prefix}/{args.run_id}/{output_file.name}"
+            upload_file_to_s3(output_file, s3_key, S3_BUCKET_PREDICTIONS)
 
 if __name__ == "__main__":
     main()

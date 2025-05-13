@@ -7,3 +7,5 @@ ultralytics
 pyarrow
 fastparquet
 tqdm
+geopandas
+SQLAlchemy

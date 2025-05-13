@@ -68,3 +68,16 @@ def download_image(camera_point_id: str, dest_image_path: Path, dest_json_path: 
             print(f"✅ JSON label downloaded: {camera_point_id}")
         except Exception as e:
             print(f"⚠️  Failed to download JSON for {camera_point_id}: {e}")
+
+
+def download_images_for_camera_points(camera_point_ids, image_dir: Path, batch_size: int = 100, overwrite=False):
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    for i in range(0, len(camera_point_ids), batch_size):
+        batch = camera_point_ids[i:i + batch_size]
+        print(f"📥 Downloading batch {i // batch_size + 1} ({len(batch)} images)...")
+        for cp_id in batch:
+            image_path = image_dir / f"{cp_id}.png"
+            if image_path.exists() and not overwrite:
+                continue
+            download_image(cp_id, dest_image_path=image_path)

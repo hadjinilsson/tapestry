@@ -1,5 +1,6 @@
 import os
 import psycopg2
+import geopandas as gpd
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
@@ -8,7 +9,7 @@ load_dotenv()
 DB_URL = os.getenv("TOPANIMEX_DB_URL")
 
 
-def get_camera_point_ids(base_network_id: str) -> list[str]:
+def get_camera_point_ids_for_base_network(base_network_id: str) -> list[str]:
     query = """
         SELECT camera_point_id
         FROM basenetwork_camerapoint
@@ -24,7 +25,7 @@ def get_camera_point_ids(base_network_id: str) -> list[str]:
             return [row["camera_point_id"] for row in rows]
 
 
-def get_camera_points_for_annotated_link_segments() -> list[str]:
+def get_camera_point_ids_for_annotated_link_segments() -> list[str]:
     query = """
         SELECT DISTINCT camera_point_id
         FROM basenetwork_linksegment
@@ -37,3 +38,98 @@ def get_camera_points_for_annotated_link_segments() -> list[str]:
             cur.execute(query)
             rows = cur.fetchall()
             return [row["camera_point_id"] for row in rows]
+
+
+def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotation_area_ids: list[str] | None = None) -> gpd.GeoDataFrame:
+    """
+    Returns all LinkSegments that intersect buffered AnnotationAreas.
+
+    Args:
+        buffer_meters: Buffer distance in meters (applied to AnnotationArea geom_3857).
+        annotation_area_ids: List of AnnotationArea IDs, or None for all.
+
+    Returns:
+        GeoDataFrame of link segments intersecting buffered annotation areas.
+    """
+    area_filter = ""
+    if annotation_area_ids:
+        id_list = ",".join(str(i) for i in annotation_area_ids)
+        area_filter = f"WHERE aa.id IN ({id_list})"
+
+    query = f"""
+        WITH selected_areas AS (
+            SELECT id, ST_Buffer(geom_3857, {buffer_meters}) AS geom
+            FROM topologyannotator_annotationarea aa
+            {area_filter}
+        )
+        SELECT ls.link_segment_id,
+               ls.base_network_id::text,
+               ls.annotated,
+               ls.camera_point_id,
+               ls.geom_3857 AS geom
+        FROM basenetwork_linksegment ls
+        JOIN selected_areas aa
+          ON ST_Intersects(ls.geom_3857, aa.geom);
+    """
+
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
+
+
+# def get_link_segments_by_camera_points(camera_point_ids: list[str]) -> gpd.GeoDataFrame:
+#     """
+#     Returns all LinkSegments whose camera_point_id is in the provided list.
+#
+#     Args:
+#         camera_point_ids: List of camera_point_id strings.
+#
+#     Returns:
+#         GeoDataFrame of link segments.
+#     """
+#     if not camera_point_ids:
+#         raise ValueError("camera_point_ids list is empty")
+#
+#     formatted_ids = ",".join(f"'{cpid}'" for cpid in camera_point_ids)
+#
+#     query = f"""
+#         SELECT link_segment_id,
+#                link_id,
+#                camera_point_id,
+#                base_network_id,
+#                annotated,
+#                geom_3857 AS geom
+#         FROM basenetwork_linksegment
+#         WHERE camera_point_id IN ({formatted_ids});
+#     """
+#
+#     gdf = gpd.read_postgis(query, con=DB_URL, geom_col='geom')
+#     return gdf
+
+
+def get_sections_by_link_segment_ids(link_segment_ids: list[str]) -> gpd.GeoDataFrame:
+    """
+    Fetches all Sections tied to the given link_segment_ids.
+
+    Args:
+        link_segment_ids: List of link_segment_id strings.
+
+    Returns:
+        GeoDataFrame of sections.
+    """
+    if not link_segment_ids:
+        raise ValueError("No link_segment_ids provided.")
+
+    formatted_ids = ",".join(f"'{sid}'" for sid in link_segment_ids)
+
+    query = f"""
+        SELECT section_id,
+               link_segment_id,
+               class,
+               subtype,
+               direction,
+               base_network_id,
+               geom
+        FROM topologyannotator_section
+        WHERE link_segment_id IN ({formatted_ids});
+    """
+
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom")

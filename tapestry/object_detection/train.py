@@ -2,9 +2,9 @@ import argparse
 from pathlib import Path
 from ultralytics import YOLO
 import os
-import boto3
 from datetime import datetime
 from dotenv import load_dotenv
+from tapestry.utils.s3 import upload_dir_to_s3
 
 load_dotenv()
 
@@ -12,9 +12,6 @@ load_dotenv()
 DATA_YAML_PATH = Path("data/data.yaml")
 DEFAULT_OUTPUT_DIR = Path("runs/object_detection")
 S3_BUCKET = os.getenv("BUCKET_NAME_MODELS")
-S3_ENDPOINT = os.getenv("AWS_S3_ENDPOINT")
-AWS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET = os.getenv("AWS_SECRET_ACCESS_KEY")
 
 # ─────────────── TRAINING ───────────────
 def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[str, str]:
@@ -28,20 +25,6 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
         name=run_id,
     )
     return run_id, results.save_dir
-
-# ─────────────── UPLOAD TO S3 ───────────────
-def upload_to_s3(local_dir: Path, s3_prefix: str):
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=S3_ENDPOINT,
-        aws_access_key_id=AWS_KEY,
-        aws_secret_access_key=AWS_SECRET,
-    )
-    for file in local_dir.rglob("*"):
-        if file.is_file():
-            s3_key = f"{s3_prefix}/{file.relative_to(local_dir)}"
-            s3.upload_file(str(file), S3_BUCKET, s3_key)
-            print(f"✅ Uploaded: {s3_key}")
 
 # ─────────────── CLI ───────────────
 def main():
@@ -58,7 +41,7 @@ def main():
 
     if args.upload:
         print("☁️ Uploading run to S3...")
-        upload_to_s3(Path(run_dir), f"{args.s3_prefix}/{run_id}")
+        upload_dir_to_s3(Path(run_dir), f"{args.s3_prefix}/{run_id}", S3_BUCKET)
 
 if __name__ == "__main__":
     main()
