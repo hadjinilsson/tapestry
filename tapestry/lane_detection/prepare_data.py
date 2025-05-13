@@ -16,11 +16,11 @@ GEOMETRY_DIR.mkdir(parents=True, exist_ok=True)
 S3_BUCKET = os.getenv("BUCKET_NAME_PREDICTIONS")
 
 def main(annotation_area_ids: list[str] | None = None, object_prediction_run_id: str = None):
-    # Step 1: Fetch all link segments within 25 m of annotation areas
+    # Step 1: Fetch all link segments within 25m of annotation areas
     print("🟡 Step 1: Fetching link segments near annotation areas...")
     candidate_link_segments = get_link_segments_near_annotation_areas(
         buffer_meters=25,
-        annotation_area_ids=annotation_area_ids
+        annotation_area_names=annotation_area_ids
     )
     print(f"✅ Retrieved {len(candidate_link_segments)} candidate link segments.")
 
@@ -90,10 +90,10 @@ def main(annotation_area_ids: list[str] | None = None, object_prediction_run_id:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--areas",
+        "--area_names",
         nargs="+",
         type=str,
-        help="List of AnnotationArea IDs to include. If omitted, all areas are used.",
+        help="List of AnnotationArea namess to include. If omitted, all areas are used.",
     )
     parser.add_argument(
         "--object-prediction-run-id",
@@ -101,4 +101,4 @@ if __name__ == "__main__":
         help="Run ID for object detection predictions to download from S3."
     )
     args = parser.parse_args()
-    main(annotation_area_ids=args.areas, object_prediction_run_id=args.object_prediction_run_id)
+    main(annotation_area_ids=args.area_names, object_prediction_run_id=args.object_prediction_run_id)

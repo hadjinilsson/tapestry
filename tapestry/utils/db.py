@@ -40,36 +40,38 @@ def get_camera_point_ids_for_annotated_link_segments() -> list[str]:
             return [row["camera_point_id"] for row in rows]
 
 
-def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotation_area_ids: list[str] | None = None) -> gpd.GeoDataFrame:
+def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotation_area_names: list[str] | None = None) -> gpd.GeoDataFrame:
     """
     Returns all LinkSegments that intersect buffered AnnotationAreas.
 
     Args:
         buffer_meters: Buffer distance in meters (applied to AnnotationArea geom_3857).
-        annotation_area_ids: List of AnnotationArea IDs, or None for all.
+        annotation_area_names: List of AnnotationArea IDs, or None for all.
 
     Returns:
         GeoDataFrame of link segments intersecting buffered annotation areas.
     """
-    area_filter = ""
-    if annotation_area_ids:
-        id_list = ",".join(str(i) for i in annotation_area_ids)
-        area_filter = f"WHERE aa.id IN ({id_list})"
+    if annotation_area_names:
+        name_list = ",".join(f"'{i}'" for i in annotation_area_names)
+        area_filter = f"WHERE aa.name IN ({name_list})"
+    else:
+        area_filter = ""  # Use all areas
 
     query = f"""
         WITH selected_areas AS (
-            SELECT id, ST_Transform(ST_Buffer(ST_Transform(geom, 3857), {buffer_meters}), 4326) AS geom
+            SELECT id, ST_Buffer(ST_Transform(geom, 3857), {buffer_meters}) AS geom_3857
             FROM topologyannotator_annotationarea aa
             {area_filter}
         )
-        SELECT ls.link_segment_id,
-               cp.base_network_id::text,
-               ls.annotated,
-               ls.camera_point_id,
-               ls.geom_3857 AS geom
+        SELECT
+            ls.link_segment_id,
+            cp.base_network_id::text,
+            ls.annotated,
+            ls.camera_point_id,
+            ls.geom_3857 AS geom
         FROM basenetwork_linksegment ls
         JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
-        JOIN selected_areas aa ON ST_Intersects(ls.geom_3857, aa.geom)
+        JOIN selected_areas aa ON ST_Intersects(ls.geom_3857, aa.geom_3857)
         LIMIT 100;
     """
 
@@ -92,12 +94,9 @@ def get_sections_by_link_segment_ids(link_segment_ids: list[str]) -> gpd.GeoData
     formatted_ids = ",".join(f"'{sid}'" for sid in link_segment_ids)
 
     query = f"""
-        SELECT section_id,
+        SELECT id AS section_id,
                link_segment_id,
-               class,
-               subtype,
-               direction,
-               base_network_id,
+               component,
                geom
         FROM topologyannotator_section
         WHERE link_segment_id IN ({formatted_ids});
