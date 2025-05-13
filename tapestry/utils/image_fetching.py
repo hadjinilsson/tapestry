@@ -65,7 +65,7 @@ def download_image(camera_point_id: str, dest_image_path: Path, dest_json_path: 
             response.raise_for_status()
             with open(dest_json_path, "wb") as f:
                 f.write(response.content)
-            print(f"✅ JSON label downloaded: {camera_point_id}")
+            # print(f"✅ JSON label downloaded: {camera_point_id}")
         except Exception as e:
             print(f"⚠️  Failed to download JSON for {camera_point_id}: {e}")
 

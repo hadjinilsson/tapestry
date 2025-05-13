@@ -1,15 +1,12 @@
 import os
 import argparse
 import pandas as pd
-import geopandas as gpd
 from pathlib import Path
 from dotenv import load_dotenv
-from glob import glob
 
-from tapestry.utils.db import get_link_segments_near_annotation_areas
+from tapestry.utils.db import get_link_segments_near_annotation_areas, get_sections_by_link_segment_ids
 from tapestry.utils.image_fetching import download_images_for_camera_points
 from tapestry.utils.s3 import download_dir_from_s3
-from tapestry.utils.db import get_sections_by_link_segment_ids
 from tapestry.lane_detection.utils.neighbours import compute_neighbours
 
 load_dotenv()
@@ -18,8 +15,7 @@ GEOMETRY_DIR = DATA_ROOT / "lane_detection" / "geometry"
 GEOMETRY_DIR.mkdir(parents=True, exist_ok=True)
 S3_BUCKET = os.getenv("BUCKET_NAME_PREDICTIONS")
 
-
-def main(annotation_area_ids: list[str] | None = None):
+def main(annotation_area_ids: list[str] | None = None, object_prediction_run_id: str = None):
     # Step 1: Fetch all link segments within 25 m of annotation areas
     print("🟡 Step 1: Fetching link segments near annotation areas...")
     candidate_link_segments = get_link_segments_near_annotation_areas(
@@ -40,29 +36,25 @@ def main(annotation_area_ids: list[str] | None = None):
     annotated_segments.to_parquet(GEOMETRY_DIR / "link_segments_annotated.parquet")
 
     camera_point_ids = annotated_segments["camera_point_id"].unique().tolist()
-    print(f"""
-    ✅ Filtered to {len(annotated_segments)}
-    annotated segments with {len(camera_point_ids)}
-    unique camera points.
-    """)
+    print(f"✅ Filtered to {len(annotated_segments)} annotated segments with {len(camera_point_ids)} unique camera points.")
 
-    # Step 3: Download images
+    # Step 3: Download images for those camera points
     images_dir = DATA_ROOT / "lane_detection" / "images"
     download_images_for_camera_points(camera_point_ids, images_dir)
     print(f"✅ Images downloaded to {images_dir}")
 
     downloaded = [f.stem for f in images_dir.glob("*.png")]
     missing = sorted(set(camera_point_ids) - set(downloaded))
-    print(f"⚠️ {len(missing)} images were not downloaded.") if missing else None
+    if missing:
+        print(f"⚠️ {len(missing)} images were not downloaded.")
 
-    # Step 4: Download object predictions
-    run_id = args.prediction_run_id
+    # Step 4: Download and validate object detection predictions
+    print("🟡 Step 4: Downloading object detection predictions...")
     predictions_dir = DATA_ROOT / "lane_detection" / "predictions"
-    s3_prefix = f"object_detection/{run_id}"
+    s3_prefix = f"object_detection/{object_prediction_run_id}"
     download_dir_from_s3(s3_prefix=s3_prefix, local_dir=predictions_dir, bucket=S3_BUCKET)
 
     pred_camera_ids = set()
-
     for parquet_path in predictions_dir.glob("*.parquet"):
         try:
             df_pred = pd.read_parquet(parquet_path)
@@ -70,7 +62,6 @@ def main(annotation_area_ids: list[str] | None = None):
         except Exception as e:
             print(f"⚠️ Could not read {parquet_path.name}: {e}")
 
-    # Determine which camera points are fully available
     existing_images = set(f.stem for f in images_dir.glob("*.png"))
     valid_cp_ids = pred_camera_ids & existing_images
 
@@ -81,19 +72,20 @@ def main(annotation_area_ids: list[str] | None = None):
     final_segments.to_parquet(GEOMETRY_DIR / "link_segments_final.parquet")
     print(f"✅ Final training set: {len(final_segments)} link segments with image + prediction.")
 
+    # Step 5: Fetch sections for the final training link segments
     print("🟡 Step 5: Fetching sections...")
     final_segment_ids = final_segments["link_segment_id"].tolist()
     sections = get_sections_by_link_segment_ids(final_segment_ids)
-
     sections_path = GEOMETRY_DIR / "sections.parquet"
     sections.to_parquet(sections_path)
     print(f"✅ Saved {len(sections)} sections to {sections_path}")
 
+    # Step 6: Compute neighbors for all final link segments
+    print("🟡 Step 6: Computing neighbor relationships...")
     neighbours = compute_neighbours(final_segments)
     neighbours_path = GEOMETRY_DIR / "neighbours.parquet"
     neighbours.to_parquet(neighbours_path)
     print(f"✅ Saved neighbor list to {neighbours_path} ({len(neighbours)} rows)")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -103,5 +95,10 @@ if __name__ == "__main__":
         type=str,
         help="List of AnnotationArea IDs to include. If omitted, all areas are used.",
     )
+    parser.add_argument(
+        "--object-prediction-run-id",
+        required=True,
+        help="Run ID for object detection predictions to download from S3."
+    )
     args = parser.parse_args()
-    main(annotation_area_ids=args.areas)
+    main(annotation_area_ids=args.areas, object_prediction_run_id=args.object_prediction_run_id)

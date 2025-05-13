@@ -11,7 +11,7 @@ BATCH_SIZE = 1000
 
 # ─────────────── TRAINING MODE ───────────────
 def prepare_training_data(min_group_size: int | None):
-    print("🧠 Running in training mode...")
+    print("🧠 Preparing training data")
     split_map = parse_annotations(DATA_ROOT, min_group_size=min_group_size)  # or set int for aggregation
     for image_stub, split in split_map.items():
         img_path = IMAGE_DIR / split / f"{image_stub}.png"
