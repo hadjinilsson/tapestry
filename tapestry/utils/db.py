@@ -66,6 +66,9 @@ def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotat
         SELECT
             ls.link_segment_id,
             cp.base_network_id::text,
+            ls.link_id,
+            ls.segment_ix_uv,
+            ls.segment_ix_vu,
             ls.annotated,
             ls.camera_point_id,
             ls.geom_3857 AS geom

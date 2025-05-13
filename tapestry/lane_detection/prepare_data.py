@@ -1,6 +1,7 @@
 import os
 import argparse
 import pandas as pd
+import geopandas as gpd
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -94,6 +95,27 @@ def main(
     neighbours_path = GEOMETRY_DIR / "neighbours.parquet"
     neighbours.to_parquet(neighbours_path)
     print(f"✅ Saved neighbor list to {neighbours_path} ({len(neighbours)} rows)")
+
+    # Step 7: Extract link ordering info
+    print("🟡 Step 7: Extract link ordering info...")
+
+    # Extract necessary fields: link_id, segment_ix_uv, segment_ix_vu, link_segment_id
+    order_df = final_segments[[
+        "link_segment_id",
+        "link_id",
+        "segment_ix_uv",
+        "segment_ix_vu"
+    ]].copy()
+
+    # Sort and group
+    order_df_uv = order_df.sort_values(["link_id", "segment_ix_uv"])
+    order_df_vu = order_df.sort_values(["link_id", "segment_ix_vu"])
+
+    # Save both orderings
+    order_df_uv.to_parquet(GEOMETRY_DIR / "segment_order_uv.parquet", index=False)
+    order_df_vu.to_parquet(GEOMETRY_DIR / "segment_order_vu.parquet", index=False)
+
+    print(f"✅ Saved ordered link segment indices to: \n  - segment_order_uv.parquet\n  - segment_order_vu.parquet")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
