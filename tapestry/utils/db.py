@@ -72,7 +72,6 @@ def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotat
         FROM basenetwork_linksegment ls
         JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
         JOIN selected_areas aa ON ST_Intersects(ls.geom_3857, aa.geom_3857)
-        LIMIT 100;
     """
 
     return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
