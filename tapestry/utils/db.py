@@ -63,13 +63,13 @@ def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotat
             {area_filter}
         )
         SELECT ls.link_segment_id,
-               ls.base_network_id::text,
+               cp.base_network_id::text,
                ls.annotated,
                ls.camera_point_id,
                ls.geom_3857 AS geom
         FROM basenetwork_linksegment ls
-        JOIN selected_areas aa
-          ON ST_Intersects(ls.geom_3857, aa.geom)
+        JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
+        JOIN selected_areas aa ON ST_Intersects(ls.geom_3857, aa.geom)
         LIMIT 100;
     """
 
