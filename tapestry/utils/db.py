@@ -69,40 +69,11 @@ def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotat
                ls.geom_3857 AS geom
         FROM basenetwork_linksegment ls
         JOIN selected_areas aa
-          ON ST_Intersects(ls.geom_3857, aa.geom);
+          ON ST_Intersects(ls.geom_3857, aa.geom)
+        LIMIT 100;
     """
 
     return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
-
-
-# def get_link_segments_by_camera_points(camera_point_ids: list[str]) -> gpd.GeoDataFrame:
-#     """
-#     Returns all LinkSegments whose camera_point_id is in the provided list.
-#
-#     Args:
-#         camera_point_ids: List of camera_point_id strings.
-#
-#     Returns:
-#         GeoDataFrame of link segments.
-#     """
-#     if not camera_point_ids:
-#         raise ValueError("camera_point_ids list is empty")
-#
-#     formatted_ids = ",".join(f"'{cpid}'" for cpid in camera_point_ids)
-#
-#     query = f"""
-#         SELECT link_segment_id,
-#                link_id,
-#                camera_point_id,
-#                base_network_id,
-#                annotated,
-#                geom_3857 AS geom
-#         FROM basenetwork_linksegment
-#         WHERE camera_point_id IN ({formatted_ids});
-#     """
-#
-#     gdf = gpd.read_postgis(query, con=DB_URL, geom_col='geom')
-#     return gdf
 
 
 def get_sections_by_link_segment_ids(link_segment_ids: list[str]) -> gpd.GeoDataFrame:
