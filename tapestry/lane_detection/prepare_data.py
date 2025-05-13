@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from tapestry.utils.db import get_link_segments_near_annotation_areas, get_sections_by_link_segment_ids
 from tapestry.utils.image_fetching import download_images_for_camera_points
+from tapestry.utils.image_fetching import download_images_for_camera_points_threaded
 from tapestry.utils.s3 import download_dir_from_s3
 from tapestry.lane_detection.utils.neighbours import compute_neighbours
 
@@ -15,7 +16,11 @@ GEOMETRY_DIR = DATA_ROOT / "lane_detection" / "geometry"
 GEOMETRY_DIR.mkdir(parents=True, exist_ok=True)
 S3_BUCKET = os.getenv("BUCKET_NAME_PREDICTIONS")
 
-def main(annotation_area_ids: list[str] | None = None, object_prediction_run_id: str = None):
+def main(
+        annotation_area_ids: list[str] | None = None,
+        object_prediction_run_id: str = None,
+        threads: int | None = None
+):
     # Step 1: Fetch all link segments within 25m of annotation areas
     print("🟡 Step 1: Fetching link segments near annotation areas...")
     candidate_link_segments = get_link_segments_near_annotation_areas(
@@ -40,7 +45,10 @@ def main(annotation_area_ids: list[str] | None = None, object_prediction_run_id:
 
     # Step 3: Download images for those camera points
     images_dir = DATA_ROOT / "lane_detection" / "images"
-    download_images_for_camera_points(camera_point_ids, images_dir)
+    if threads and threads > 0:
+        download_images_for_camera_points_threaded(camera_point_ids, images_dir, max_workers=args.threads)
+    else:
+        download_images_for_camera_points(camera_point_ids, images_dir)
     print(f"✅ Images downloaded to {images_dir}")
 
     downloaded = [f.stem for f in images_dir.glob("*.png")]
@@ -100,5 +108,14 @@ if __name__ == "__main__":
         required=True,
         help="Run ID for object detection predictions to download from S3."
     )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        help="Enable threaded image download (specify number of threads)"
+    )
     args = parser.parse_args()
-    main(annotation_area_ids=args.area_names, object_prediction_run_id=args.object_prediction_run_id)
+    main(
+        annotation_area_ids=args.area_names,
+        object_prediction_run_id=args.object_prediction_run_id,
+        threads=args.threads,
+    )

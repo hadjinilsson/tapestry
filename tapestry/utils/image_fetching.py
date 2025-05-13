@@ -3,6 +3,7 @@ import boto3
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 load_dotenv()
 
@@ -81,3 +82,38 @@ def download_images_for_camera_points(camera_point_ids, image_dir: Path, batch_s
             if image_path.exists() and not overwrite:
                 continue
             download_image(cp_id, dest_image_path=image_path)
+
+
+def download_images_for_camera_points_threaded(
+        camera_point_ids,
+        image_dir: Path,
+        max_workers: int = 16,
+        overwrite=False
+):
+    """
+    Download images using multithreading.
+
+    Args:
+        camera_point_ids: List of camera_point_id strings.
+        image_dir: Directory to save images.
+        max_workers: Number of threads to use.
+        overwrite: If False, skips images that already exist.
+    """
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    def download_one(cp_id):
+        img_path = image_dir / f"{cp_id}.png"
+        if not overwrite and img_path.exists():
+            return
+        download_image(cp_id, dest_image_path=img_path)
+
+    print(f"📥 Downloading {len(camera_point_ids)} images with {max_workers} threads...")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(download_one, cp_id): cp_id for cp_id in camera_point_ids}
+        for i, future in enumerate(as_completed(futures), 1):
+            try:
+                future.result()
+            except Exception as e:
+                cp_id = futures[future]
+                print(f"⚠️ Failed to download image {cp_id}: {e}")
