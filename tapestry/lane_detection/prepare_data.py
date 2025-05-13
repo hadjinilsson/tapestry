@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from tapestry.utils.db import get_link_segments_near_annotation_areas, get_sections_by_link_segment_ids
+from tapestry.utils.db import get_base_network_crs
 from tapestry.utils.image_fetching import download_images_for_camera_points
 from tapestry.utils.image_fetching import download_images_for_camera_points_threaded
 from tapestry.utils.s3 import download_dir_from_s3
@@ -24,25 +25,25 @@ def main(
 ):
     # Step 1: Fetch all link segments within 25m of annotation areas
     print("🟡 Step 1: Fetching link segments near annotation areas...")
-    candidate_link_segments = get_link_segments_near_annotation_areas(
+    all_link_segments = get_link_segments_near_annotation_areas(
         buffer_meters=25,
         annotation_area_names=annotation_area_ids
     )
-    print(f"✅ Retrieved {len(candidate_link_segments)} candidate link segments.")
+    print(f"✅ Retrieved {len(all_link_segments)} candidate link segments.")
 
-    candidate_path = GEOMETRY_DIR / "link_segments_all.parquet"
-    candidate_link_segments.to_parquet(candidate_path)
-    print(f"📦 Saved all link segments to {candidate_path}")
+    all_link_path = GEOMETRY_DIR / "link_segments_all.parquet"
+    all_link_segments.to_parquet(all_link_path)
+    print(f"📦 Saved all link segments to {all_link_path}")
 
     # Step 2: Filter annotated segments with valid camera point
-    annotated_segments = candidate_link_segments[
-        (candidate_link_segments["annotated"] == "Y") &
-        (candidate_link_segments["camera_point_id"].notnull())
+    annotated_link_segments = all_link_segments[
+        (all_link_segments["annotated"] == "Y") &
+        (all_link_segments["camera_point_id"].notnull())
     ].copy()
-    annotated_segments.to_parquet(GEOMETRY_DIR / "link_segments_annotated.parquet")
+    annotated_link_segments.to_parquet(GEOMETRY_DIR / "link_segments_annotated.parquet")
 
-    camera_point_ids = annotated_segments["camera_point_id"].unique().tolist()
-    print(f"✅ Filtered to {len(annotated_segments)} annotated segments with {len(camera_point_ids)} unique camera points.")
+    camera_point_ids = annotated_link_segments["camera_point_id"].unique().tolist()
+    print(f"✅ Filtered to {len(annotated_link_segments)} annotated segments with {len(camera_point_ids)} unique camera points.")
 
     # Step 3: Download images for those camera points
     images_dir = DATA_ROOT / "lane_detection" / "images"
@@ -74,16 +75,16 @@ def main(
     existing_images = set(f.stem for f in images_dir.glob("*.png"))
     valid_cp_ids = pred_camera_ids & existing_images
 
-    final_segments = annotated_segments[
-        annotated_segments["camera_point_id"].isin(valid_cp_ids)
+    training_link_segments = annotated_link_segments[
+        annotated_link_segments["camera_point_id"].isin(valid_cp_ids)
     ].copy()
 
-    final_segments.to_parquet(GEOMETRY_DIR / "link_segments_final.parquet")
-    print(f"✅ Final training set: {len(final_segments)} link segments with image + prediction.")
+    training_link_segments.to_parquet(GEOMETRY_DIR / "link_segments_training.parquet")
+    print(f"✅ Final training set: {len(training_link_segments)} link segments with image + prediction.")
 
     # Step 5: Fetch sections for the final training link segments
     print("🟡 Step 5: Fetching sections...")
-    final_segment_ids = final_segments["link_segment_id"].tolist()
+    final_segment_ids = training_link_segments["link_segment_id"].tolist()
     sections = get_sections_by_link_segment_ids(final_segment_ids)
     sections_path = GEOMETRY_DIR / "sections.parquet"
     sections.to_parquet(sections_path)
@@ -91,7 +92,8 @@ def main(
 
     # Step 6: Compute neighbors for all final link segments
     print("🟡 Step 6: Computing neighbor relationships...")
-    neighbours = compute_neighbours(final_segments)
+    crs_lookup = get_base_network_crs()
+    neighbours = compute_neighbours(training_link_segments, crs_lookup)
     neighbours_path = GEOMETRY_DIR / "neighbours.parquet"
     neighbours.to_parquet(neighbours_path)
     print(f"✅ Saved neighbor list to {neighbours_path} ({len(neighbours)} rows)")
@@ -100,7 +102,7 @@ def main(
     print("🟡 Step 7: Extract link ordering info...")
 
     # Extract necessary fields: link_id, segment_ix_uv, segment_ix_vu, link_segment_id
-    order_df = final_segments[[
+    order_df = training_link_segments[[
         "link_segment_id",
         "link_id",
         "segment_ix_uv",
@@ -116,6 +118,52 @@ def main(
     order_df_vu.to_parquet(GEOMETRY_DIR / "segment_order_vu.parquet", index=False)
 
     print(f"✅ Saved ordered link segment indices to: \n  - segment_order_uv.parquet\n  - segment_order_vu.parquet")
+
+    # Step 8: Reproject geometries to local CRS (per base network)
+    print("🟡 Step 8: Reprojecting link segments and sections by base network...")
+
+    all_link_segments['is_training'] = True
+    all_link_segments.loc[
+        ~all_link_segments.link_segment_id.isin(training_link_segments.link_segment_id),
+        'is_training'
+    ] = False
+
+    projected_links = []
+    projected_sections = []
+
+    for base_network_id, epsg in crs_lookup.items():
+        print(f"  ↪ Reprojecting base network {base_network_id} to EPSG:{epsg}...")
+
+        # --- Link Segments ---
+        ls_subset = all_link_segments[all_link_segments["base_network_id"] == base_network_id].copy()
+        if not ls_subset.empty:
+            gdf_ls = gpd.GeoDataFrame(ls_subset, geometry="geom", crs="EPSG:3857")
+            gdf_ls_proj = gdf_ls.to_crs(epsg=epsg)
+            gdf_ls_proj["geom_proj"] = gdf_ls_proj.geometry
+            gdf_ls_proj["length_proj"] = gdf_ls_proj.geometry.length
+            gdf_ls_proj = gdf_ls_proj.drop(columns=["geom"])
+            projected_links.append(gdf_ls_proj)
+
+        # --- Sections ---
+        s_subset = sections[sections["base_network_id"] == base_network_id].copy()
+        if not s_subset.empty:
+            gdf_sec = gpd.GeoDataFrame(s_subset, geometry="geom", crs="EPSG:4326")
+            gdf_sec_proj = gdf_sec.to_crs(epsg=epsg)
+            gdf_sec_proj["geom_proj"] = gdf_sec_proj.geometry
+            gdf_sec_proj["length_proj"] = gdf_sec_proj.geometry.length
+            gdf_sec_proj = gdf_sec_proj.drop(columns=["geom"])
+            projected_sections.append(gdf_sec_proj)
+
+    if projected_links:
+        df_links_proj = pd.concat(projected_links, ignore_index=True)
+        df_links_proj.to_parquet(GEOMETRY_DIR / "link_segments_projected.parquet")
+        print(f"✅ Saved projected link segments ({len(df_links_proj)} rows)")
+
+    if projected_sections:
+        df_sections_proj = pd.concat(projected_sections, ignore_index=True)
+        df_sections_proj.to_parquet(GEOMETRY_DIR / "sections_projected.parquet")
+        print(f"✅ Saved projected sections ({len(df_sections_proj)} rows)")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
