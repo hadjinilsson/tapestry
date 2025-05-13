@@ -58,7 +58,7 @@ def get_link_segments_near_annotation_areas(buffer_meters: float = 25.0, annotat
 
     query = f"""
         WITH selected_areas AS (
-            SELECT id, ST_Buffer(geom_3857, {buffer_meters}) AS geom
+            SELECT id, ST_Transform(ST_Buffer(ST_Transform(geom, 3857), {buffer_meters}), 4326) AS geom
             FROM topologyannotator_annotationarea aa
             {area_filter}
         )
