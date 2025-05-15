@@ -1,8 +1,10 @@
 import os
+import math
 import argparse
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
+from shapely.geometry import LineString
 from dotenv import load_dotenv
 
 from tapestry.utils.db import get_link_segments_near_annotation_areas, get_sections_by_link_segment_ids
@@ -17,6 +19,13 @@ DATA_ROOT = Path("data")
 GEOMETRY_DIR = DATA_ROOT / "lane_detection" / "geometry"
 GEOMETRY_DIR.mkdir(parents=True, exist_ok=True)
 S3_BUCKET = os.getenv("BUCKET_NAME_PREDICTIONS")
+
+
+def compute_bearing(geom: LineString) -> float:
+    x1, y1 = geom.coords[0]
+    x2, y2 = geom.coords[-1]
+    return math.degrees(math.atan2(y2 - y1, x2 - x1)) % 360
+
 
 def main(
         annotation_area_ids: list[str] | None = None,
@@ -156,11 +165,13 @@ def main(
 
     if projected_links:
         df_links_proj = pd.concat(projected_links, ignore_index=True)
+        df_links_proj["bearing"] = df_links_proj["geom_proj"].apply(compute_bearing)
         df_links_proj.to_parquet(GEOMETRY_DIR / "link_segments_projected.parquet")
         print(f"✅ Saved projected link segments ({len(df_links_proj)} rows)")
 
     if projected_sections:
         df_sections_proj = pd.concat(projected_sections, ignore_index=True)
+        df_sections_proj["bearing"] = df_sections_proj["geom_proj"].apply(compute_bearing)
         df_sections_proj.to_parquet(GEOMETRY_DIR / "sections_projected.parquet")
         print(f"✅ Saved projected sections ({len(df_sections_proj)} rows)")
 
