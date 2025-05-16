@@ -32,10 +32,10 @@ def main(
         object_prediction_run_id: str = None,
         threads: int | None = None
 ):
-    # Step 1: Fetch all link segments within 25m of annotation areas
+    # Step 1: Fetch all link segments within 50m of annotation areas
     print("🟡 Step 1: Fetching link segments near annotation areas...")
     all_link_segments = get_link_segments_near_annotation_areas(
-        buffer_meters=25,
+        buffer_meters=50,
         annotation_area_names=annotation_area_ids
     )
     print(f"✅ Retrieved {len(all_link_segments)} candidate link segments.")

@@ -54,7 +54,7 @@ class LaneDetectionDataset(Dataset):
         # Build link_id to ordered segments map
         self.link_order = self._build_link_order()
 
-        # Build index of training samples (link_segment_id, geometry length)
+        # Build index of samples (link_segment_id, geometry length)
         if self.mode == "inference":
             self.samples = self._build_sample_index(sample_every_meters)
         else:
@@ -130,14 +130,19 @@ class LaneDetectionDataset(Dataset):
         for i, seg in enumerate(lon_segments):
             seg_id = seg["link_segment_id"]
             used_len = seg["used_length"]
-            is_training = seg.get("is_training", False)
-            should_slice_end = not is_training and used_len < self.link_segments.loc[seg_id]["length_proj"]
+            is_current = seg.get("is_current", False)
+            should_slice_end = not is_current and used_len < self.link_segments.loc[seg_id]["length_proj"]
             if not should_slice_end:
                 slice_tensor = self.load_segment_image_slice(seg_id, used_len)
             else:
-                slice_from = "top" if i > len(lon_segments) // 2 else "bottom"
+                current_index = next(i for i, seg in enumerate(lon_segments) if seg["is_current"])
+                if not is_current:
+                    slice_from = "top" if i < current_index else "bottom"
+                else:
+                    slice_from = None
                 slice_tensor = self.load_segment_image_slice(seg_id, used_len, slice_from=slice_from)
             slices.append(slice_tensor)
+        slices = slices[::-1]
 
         # Stitch together vertically (along height)
         image_tensor = torch.cat(slices, dim=1)  # (3, H_total, W)
@@ -214,17 +219,20 @@ class LaneDetectionDataset(Dataset):
             longitudinal_neighbours.insert(0, {
                 "link_segment_id": seg_id,
                 "used_length": used_len,
-                "is_training": False,
+                "is_current": False,
             })
             remaining_back -= seg_len
             i -= 1
 
         # Current segment
-        used_current_len = min(length, 2 * self.longitudinal_coverage)
+        used_current_len = (
+                min(distance_on_line, self.longitudinal_coverage) +
+                min(length - distance_on_line, self.longitudinal_coverage)
+        )
         longitudinal_neighbours.append({
             "link_segment_id": link_segment_id,
             "used_length": used_current_len,
-            "is_training": True,
+            "is_current": True,
         })
 
         # Proceeding (forward)
@@ -237,7 +245,7 @@ class LaneDetectionDataset(Dataset):
             longitudinal_neighbours.append({
                 "link_segment_id": seg_id,
                 "used_length": used_len,
-                "is_training": False,
+                "is_current": False,
             })
             remaining_forward -= seg_len
             i += 1
@@ -313,7 +321,7 @@ class LaneDetectionDataset(Dataset):
         Args:
             link_segment_id: segment to load
             used_length: how much of the segment image to use (in meters)
-            slice_from: if not training, where to slice from ("top" or "bottom")
+            slice_from: "top" or "bottom" (only applies to non-current segments)
 
         Returns:
             torch.Tensor of shape (3, H_partial, W), ready to be concatenated
@@ -322,6 +330,11 @@ class LaneDetectionDataset(Dataset):
         camera_id = row["camera_point_id"]
         segment_length = row["length_proj"]
         slice_height = int(round(used_length * self.pixels_per_meter))
+
+        # If zero length (shouldn't really happen)
+        if used_length <= 0:
+            print(f"⚠️ Zero-length slice for {link_segment_id}, skipping")
+            return torch.zeros((3, 1, self.dim_pixels))
 
         # Fill in empty if no camera point (which shouldn't really happen)
         if pd.isnull(camera_id):
