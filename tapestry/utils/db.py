@@ -50,7 +50,6 @@ def get_camera_point_ids_for_annotated_link_segments() -> list[str]:
         FROM basenetwork_linksegment
         WHERE annotated = 'Y'
           AND camera_point_id IS NOT NULL
-          AND extracted = 'Y';
     """
 
     with psycopg2.connect(DB_URL, cursor_factory=RealDictCursor) as conn:
