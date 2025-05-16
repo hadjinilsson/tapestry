@@ -1,7 +1,6 @@
 import argparse
 import os
 from pathlib import Path
-import boto3
 import pandas as pd
 from dotenv import load_dotenv
 from ultralytics import YOLO
@@ -57,18 +56,22 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
             results = model.predict(image_paths, save=False, verbose=False)
 
             for cp_id, result in zip(batch, results):
+                img_w, img_h = result.orig_shape[1], result.orig_shape[0]
                 for box in result.boxes:
                     cls = int(box.cls.item())
                     conf = float(box.conf.item())
-                    xywh = box.xywh[0].tolist()
+                    x_center_norm = box.xywh[0][0].item() / img_w
+                    y_center_norm = box.xywh[0][1].item() / img_h
+                    width_norm = box.xywh[0][2].item() / img_w
+                    height_norm = box.xywh[0][3].item() / img_h
                     all_preds.append({
                         "camera_point_id": cp_id,
                         "class": cls,
                         "confidence": conf,
-                        "x_center": xywh[0],
-                        "y_center": xywh[1],
-                        "width": xywh[2],
-                        "height": xywh[3],
+                        "x_center": x_center_norm,
+                        "y_center": y_center_norm,
+                        "width": width_norm,
+                        "height": height_norm,
                     })
 
         finally:
