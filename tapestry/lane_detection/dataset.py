@@ -102,6 +102,7 @@ class LaneDetectionDataset(Dataset):
             link_segment_id = self.samples[idx]
             row = self.link_segments.loc[link_segment_id]
             distance = random.uniform(0.0, row["length_proj"])
+            distance = 10
 
         # Get link segment data
         geom = row['geom_proj']

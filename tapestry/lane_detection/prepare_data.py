@@ -13,6 +13,7 @@ from tapestry.utils.image_fetching import download_images_for_camera_points
 from tapestry.utils.image_fetching import download_images_for_camera_points_threaded
 from tapestry.utils.s3 import download_dir_from_s3
 from tapestry.lane_detection.utils.neighbours import compute_neighbours
+from tapestry.lane_detection.utils.camera_point_offset import get_camera_point_offset
 
 load_dotenv()
 DATA_ROOT = Path("data")
@@ -40,11 +41,15 @@ def main(
     )
     print(f"✅ Retrieved {len(all_link_segments)} candidate link segments.")
 
+    # Ste 2: Calculate camera point offsets
+    crs_lookup = get_base_network_crs()
+    all_link_segments = get_camera_point_offset(all_link_segments, crs_lookup)
+
     all_link_path = GEOMETRY_DIR / "link_segments_all.parquet"
     all_link_segments.to_parquet(all_link_path)
     print(f"📦 Saved all link segments to {all_link_path}")
 
-    # Step 2: Filter annotated segments with valid camera point
+    # Step 3: Filter annotated segments with valid camera point
     annotated_link_segments = all_link_segments[
         (all_link_segments["annotated"] == "Y") &
         (all_link_segments["camera_point_id"].notnull())
@@ -54,7 +59,7 @@ def main(
     camera_point_ids = annotated_link_segments["camera_point_id"].unique().tolist()
     print(f"✅ Filtered to {len(annotated_link_segments)} annotated segments with {len(camera_point_ids)} unique camera points.")
 
-    # Step 3: Download images for those camera points
+    # Step 4: Download images for those camera points
     images_dir = DATA_ROOT / "lane_detection" / "images"
     if threads and threads > 0:
         download_images_for_camera_points_threaded(camera_point_ids, images_dir, max_workers=args.threads)
@@ -67,8 +72,8 @@ def main(
     if missing:
         print(f"⚠️ {len(missing)} images were not downloaded.")
 
-    # Step 4: Download and validate object detection predictions
-    print("🟡 Step 4: Downloading object detection predictions...")
+    # Step 5: Download and validate object detection predictions
+    print("🟡 Step 5: Downloading object detection predictions...")
     predictions_dir = DATA_ROOT / "lane_detection" / "predictions"
     s3_prefix = f"object_detection/{object_prediction_run_id}"
     download_dir_from_s3(s3_prefix=s3_prefix, local_dir=predictions_dir, bucket=S3_BUCKET)
@@ -91,24 +96,23 @@ def main(
     training_link_segments.to_parquet(GEOMETRY_DIR / "link_segments_training.parquet")
     print(f"✅ Final training set: {len(training_link_segments)} link segments with image + prediction.")
 
-    # Step 5: Fetch sections for the final training link segments
-    print("🟡 Step 5: Fetching sections...")
+    # Step 6: Fetch sections for the final training link segments
+    print("🟡 Step 6: Fetching sections...")
     final_segment_ids = training_link_segments["link_segment_id"].tolist()
     sections = get_sections_by_link_segment_ids(final_segment_ids)
     sections_path = GEOMETRY_DIR / "sections.parquet"
     sections.to_parquet(sections_path)
     print(f"✅ Saved {len(sections)} sections to {sections_path}")
 
-    # Step 6: Compute neighbors for all final link segments
-    print("🟡 Step 6: Computing neighbor relationships...")
-    crs_lookup = get_base_network_crs()
+    # Step 7: Compute neighbors for all final link segments
+    print("🟡 Step 7: Computing neighbor relationships...")
     neighbours = compute_neighbours(training_link_segments, crs_lookup)
     neighbours_path = GEOMETRY_DIR / "neighbours.parquet"
     neighbours.to_parquet(neighbours_path)
     print(f"✅ Saved neighbor list to {neighbours_path} ({len(neighbours)} rows)")
 
-    # Step 7: Extract link ordering info
-    print("🟡 Step 7: Extract link ordering info...")
+    # Step 8: Extract link ordering info
+    print("🟡 Step 8: Extract link ordering info...")
 
     # Extract necessary fields: link_id, segment_ix_uv, segment_ix_vu, link_segment_id
     order_df = training_link_segments[[
@@ -128,7 +132,7 @@ def main(
 
     print(f"✅ Saved ordered link segment indices to: \n  - segment_order_uv.parquet\n  - segment_order_vu.parquet")
 
-    # Step 8: Reproject geometries to local CRS (per base network)
+    # Step 9: Reproject geometries to local CRS (per base network)
     print("🟡 Step 8: Reprojecting link segments and sections by base network...")
 
     all_link_segments['is_training'] = True

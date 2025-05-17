@@ -1,6 +1,8 @@
 import os
 import psycopg2
+import pandas as pd
 import geopandas as gpd
+from shapely import wkb
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
@@ -61,7 +63,8 @@ def get_camera_point_ids_for_annotated_link_segments() -> list[str]:
 
 def get_link_segments_near_annotation_areas(
     buffer_meters: float = 25.0,
-    annotation_area_names: list[str] | None = None
+    annotation_area_names: list[str] | None = None,
+    get_camera_point_geoms: bool = True,
 ) -> gpd.GeoDataFrame:
     """
     Returns all LinkSegments that intersect buffered AnnotationAreas,
@@ -70,6 +73,7 @@ def get_link_segments_near_annotation_areas(
     Args:
         buffer_meters: Buffer distance in meters (applied to AnnotationArea geom_3857).
         annotation_area_names: List of AnnotationArea IDs, or None for all.
+        get_camera_point_geoms: Optional flag to get camera point geometries.
 
     Returns:
         GeoDataFrame of link segments intersecting buffered annotation areas.
@@ -80,6 +84,20 @@ def get_link_segments_near_annotation_areas(
     else:
         area_filter = ""  # Use all areas
 
+    columns = """
+        ls.link_segment_id,
+        cp.base_network_id::text,
+        ls.link_id,
+        ls.segment_ix_uv,
+        ls.segment_ix_vu,
+        ls.annotated,
+        ls.camera_point_id,
+        ls.geom_3857 AS geom
+    """
+
+    if get_camera_point_geoms:
+        columns += ", ST_Transform(cp.geom, 3857) as camera_geom"
+
     query = f"""
         WITH selected_areas AS (
             SELECT id, ST_Buffer(ST_Transform(geom, 3857), {buffer_meters}) AS geom_3857
@@ -87,21 +105,22 @@ def get_link_segments_near_annotation_areas(
             {area_filter}
         )
         SELECT
-            ls.link_segment_id,
-            cp.base_network_id::text,
-            ls.link_id,
-            ls.segment_ix_uv,
-            ls.segment_ix_vu,
-            ls.annotated,
-            ls.camera_point_id,
-            ls.geom_3857 AS geom
+            {columns}
         FROM basenetwork_linksegment ls
         JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
         JOIN selected_areas aa ON ST_Intersects(ls.geom_3857, aa.geom_3857)
         WHERE cp.extracted = 'Y';
     """
 
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
+    df = pd.read_sql(query, con=DB_URL)
+    df["geom"] = df["geom"].apply(wkb.loads)
+    gdf = gpd.GeoDataFrame(df, geometry="geom", crs="EPSG:3857")
+
+    if get_camera_point_geoms:
+        gdf["camera_geom"] = gdf["camera_geom"].apply(wkb.loads)
+        gdf["camera_geom"] = gpd.GeoSeries(gdf["camera_geom"], crs="EPSG:3857")
+
+    return gdf
 
 
 def get_sections_by_link_segment_ids(link_segment_ids: list[str]) -> gpd.GeoDataFrame:
