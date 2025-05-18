@@ -400,8 +400,8 @@ class LaneDetectionDataset(Dataset):
         camera_id = seg["camera_point_id"]
         camera_offset_m = seg.get("camera_point_offset", 0.0)
 
-        seg_len_px = seg_len_m * self.pixels_per_meter
-        seg_used_len_px = seg_used_len_m * self.pixels_per_meter
+        seg_len_px = int(seg_len_m * self.pixels_per_meter)
+        seg_used_len_px = int(seg_used_len_m * self.pixels_per_meter)
 
         if seg_used_len_m <= 0:
             print(f"⚠️ Zero-length slice for {seg_id}, skipping")
@@ -419,6 +419,12 @@ class LaneDetectionDataset(Dataset):
         # Load and resize
         img = Image.open(image_path).convert("RGB").resize((self.dim_pixels, self.dim_pixels))
         img_np = np.array(img)
+
+        # Measurement from bottom
+        center_img_m = self.dim_gsdm / 2
+        # center_seg_m = center_img_m +
+        if True:
+            return torch.zeros((3, seg_used_len_px, self.dim_pixels))
 
         # seg_id = lon_neighbour["link_segment_id"]
         # used_len = lon_neighbour["used_length"]
@@ -460,30 +466,30 @@ class LaneDetectionDataset(Dataset):
         # img = Image.open(image_path).convert("RGB").resize((self.dim_pixels, self.dim_pixels))
         # img_np = np.array(img)
 
-        # Crop based on camera point offset
-        center_pixel = int((self.dim_gsdm / 2 + camera_offset) * pixels_per_meter)
-        visible_height = int(round(segment_length * pixels_per_meter))
-        start = max(0, center_pixel - visible_height // 2)
-        end = min(self.dim_pixels, start + visible_height)
-        cropped = img_np[start:end, :, :]
-
-        # Apply top/bottom slicing
-        if slice_from == "top":
-            sliced = cropped[:slice_height, :, :]
-            pad = slice_height - sliced.shape[0]
-            if pad > 0:
-                sliced = np.vstack([
-                    sliced,
-                    np.zeros((pad, self.dim_pixels, 3), dtype=np.uint8)
-                ])
-        elif slice_from == "bottom":
-            sliced = cropped[-slice_height:, :, :]
-            pad = slice_height - sliced.shape[0]
-            if pad > 0:
-                sliced = np.vstack([
-                    np.zeros((pad, self.dim_pixels, 3), dtype=np.uint8),
-                    sliced
-                ])
+        # # Crop based on camera point offset
+        # center_pixel = int((self.dim_gsdm / 2 + camera_offset) * pixels_per_meter)
+        # visible_height = int(round(segment_length * pixels_per_meter))
+        # start = max(0, center_pixel - visible_height // 2)
+        # end = min(self.dim_pixels, start + visible_height)
+        # cropped = img_np[start:end, :, :]
+        #
+        # # Apply top/bottom slicing
+        # if slice_from == "top":
+        #     sliced = cropped[:slice_height, :, :]
+        #     pad = slice_height - sliced.shape[0]
+        #     if pad > 0:
+        #         sliced = np.vstack([
+        #             sliced,
+        #             np.zeros((pad, self.dim_pixels, 3), dtype=np.uint8)
+        #         ])
+        # elif slice_from == "bottom":
+        #     sliced = cropped[-slice_height:, :, :]
+        #     pad = slice_height - sliced.shape[0]
+        #     if pad > 0:
+        #         sliced = np.vstack([
+        #             np.zeros((pad, self.dim_pixels, 3), dtype=np.uint8),
+        #             sliced
+        #         ])
         # else:
         #     # For current segment or exact fit
         #     pad = slice_height - cropped.shape[0]
