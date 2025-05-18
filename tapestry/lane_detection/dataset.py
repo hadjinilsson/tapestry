@@ -150,53 +150,7 @@ class LaneDetectionDataset(Dataset):
             raise ValueError(f"Discontinuous link segment sequence in longitudinal context: {indices}")
 
         # Get image slices
-        image_tensor = self.load_slices(lon_neighbours, used_preceding_length, used_proceeding_length)
-        # img_slices = []
-        # for i, lon_neighbour in enumerate(lon_neighbours):
-        #     is_first = i == (len(lon_neighbours) - 1)
-        #     is_last = i == 0
-        #     img_slice = self.load_slices(
-        #         lon_neighbour,
-        #         is_first,
-        #         is_last,
-        #         used_preceding_length,
-        #         used_proceeding_length,
-        #     )
-        #     img_slices.append(img_slice)
-
-            # seg_id = lon_neighbour["link_segment_id"]
-            # used_len = lon_neighbour["used_length"]
-            # is_current = lon_neighbour.get("is_current", False)
-            # should_slice_end = not is_current and used_len < self.link_segments.loc[seg_id]["length_proj"]
-            # if not should_slice_end:
-            #     slice_tensor = self.load_segment_image_slice(seg_id, used_len)
-            # else:
-            #     current_index = next(i for i, lon_neighbour in enumerate(lon_neighbours) if lon_neighbour["is_current"])
-            #     if not is_current:
-            #         slice_from = "top" if i > current_index else "bottom"
-            #     else:
-            #         slice_from = None
-            #     slice_tensor = self.load_segment_image_slice(seg_id, used_len, slice_from=slice_from)
-            # img_slices.append(slice_tensor)
-
-        # Stitch together vertically (along height)
-        # image_tensor = torch.cat(img_slices, dim=1)  # (3, H_total, W)
-
-        # # Total stitched height in pixels
-        # total_height = image_tensor.shape[1]
-        #
-        # # check if padding is needed
-        # if total_height < self.dim_pixels:
-        #     pad_needed = self.dim_pixels - total_height
-        #     pad_top = pad_needed // 2
-        #     padding = torch.zeros((3, pad_top, image_tensor.shape[2]))
-        #     image_tensor = torch.cat([padding, image_tensor, padding.clone()], dim=1)
-
-        # # Final fit to pixel dimension
-        # image_tensor = torch.nn.functional.interpolate(
-        #     image_tensor.unsqueeze(0), size=(self.dim_pixels, self.dim_pixels), mode="bilinear",
-        #     align_corners=False
-        # ).squeeze(0)
+        image_tensor = self.get_slices(lon_neighbours, used_preceding_length, used_proceeding_length)
 
         prediction_slices = []
         offset_y = 0
@@ -290,8 +244,6 @@ class LaneDetectionDataset(Dataset):
                 "link_segment_id": pre_seg_id,
                 "used_length": pre_seg_used_len,
                 "placement": "preceding",
-                # "is_first_uv": self.link_segments.loc[pre_seg_id]["segment_ix_uv"] == 0,
-                # "is_last_uv": self.link_segments.loc[pre_seg_id]["segment_ix_vu"] == 0,
             })
             remaining_back -= pre_seg_len
             i -= 1
@@ -305,8 +257,6 @@ class LaneDetectionDataset(Dataset):
             "link_segment_id": current_seg_id,
             "used_length": current_seg_used_len,
             "placement": "current",
-            # "is_first_uv": self.link_segments.loc[current_seg_id]["segment_ix_uv"] == 0,
-            # "is_last_uv": self.link_segments.loc[current_seg_id]["segment_ix_vu"] == 0,
         }]
 
         # Proceeding (top of image)
@@ -321,8 +271,6 @@ class LaneDetectionDataset(Dataset):
                 "link_segment_id": pro_seg_id,
                 "used_length": pro_seg_used_len,
                 "placement": "proceeding",
-                # "is_first_uv": self.link_segments.loc[pro_seg_id]["segment_ix_uv"] == 0,
-                # "is_last_uv": self.link_segments.loc[pro_seg_id]["segment_ix_vu"] == 0,
             })
             remaining_forward -= pro_seg_len
             i += 1
@@ -389,25 +337,12 @@ class LaneDetectionDataset(Dataset):
 
         return forward, backward
 
-    def load_slices(
+    def get_slices(
             self,
             lon_neighbours: list[dict],
             used_preceding_length: float,
             used_proceeding_length: float,
     ) -> torch.Tensor:
-    # def load_segment_image_slice(
-    #         self,
-    #         link_segment_id: str,
-    #         used_length: float,
-    #         slice_from: str | None = None,
-    # ) -> torch.Tensor:
-        """
-        Loads and vertically slices the image for a given link segment, ensuring output slice
-        has fixed height corresponding to `used_length`.
-
-        Returns:
-            torch.Tensor of shape (3, slice_height, W), ready for stitching
-        """
 
         img_slices = []
 
@@ -419,20 +354,12 @@ class LaneDetectionDataset(Dataset):
             seg_id = lon_neighbour["link_segment_id"]
             seg = self.link_segments.loc[seg_id]
 
-            is_current = lon_neighbour.get("is_current", False)
-            # is_first_uv = lon_neighbour.get("is_first_uv", False)
-            # is_last_uv = lon_neighbour.get("is_last_uv", False)
-
             is_first_uv = seg["segment_ix_uv"] == 0
             is_last_uv = seg["segment_ix_vu"] == 0
 
             seg_len_m = seg["length_proj"]
             seg_used_len_m = lon_neighbour.get("used_length", 0.0)
-            camera_id = seg["camera_point_id"]
             camera_offset_m = seg.get("camera_point_offset", 0.0)
-
-            seg_len_px = int(seg_len_m * self.pixels_per_meter)
-            seg_used_len_px = int(seg_used_len_m * self.pixels_per_meter)
 
             # Measurement from bottom
             img_center_m = self.dim_gsdm / 2
@@ -454,7 +381,6 @@ class LaneDetectionDataset(Dataset):
             elif is_first:
                 slice_start_m = seg_end_m - seg_used_len_m
                 slice_end_m = seg_end_m
-                slice_len_m = seg_used_len_m
             elif is_last and is_last_uv:
                 extra_needed_m = self.longitudinal_coverage - used_proceeding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
@@ -466,135 +392,63 @@ class LaneDetectionDataset(Dataset):
             elif is_last:
                 slice_start_m = seg_start_m
                 slice_end_m = seg_start_m + seg_used_len_m
-                slice_len_m = seg_used_len_m
             else:
                 slice_start_m = seg_start_m
                 slice_end_m = seg_end_m
-                slice_len_m = seg_used_len_m
 
-            slice_start_px = int(round((self.dim_gsdm - slice_end_m) * self.pixels_per_meter))
-            slice_end_px = int(round((self.dim_gsdm - slice_start_m) * self.pixels_per_meter))
-
-            if seg_used_len_m <= 0:
-                print(f"⚠️ Zero-length slice for {seg_id}, skipping")
-                return torch.zeros((3, 1, self.dim_pixels))
-
-            if pd.isnull(camera_id):
-                slice_len_px = int(round((pad_above_m + slice_len_m + pad_below_m) * self.pixels_per_meter))
-                print(f"⚠️ No camera point for {seg_id}, inserting blank slice")
-                return torch.zeros((3, slice_len_px, self.dim_pixels))
-
-            image_path = self.image_dir / f"{camera_id}.png"
-            if not image_path.exists():
-                slice_len_px = int(round((pad_above_m + slice_len_m + pad_below_m) * self.pixels_per_meter))
-                print(f"⚠️ Missing image {image_path.name}, inserting blank slice")
-                return torch.zeros((3, slice_len_px, self.dim_pixels))
-
-            # Load and resize
-            img = Image.open(image_path).convert("RGB").resize((self.dim_pixels, self.dim_pixels))
-            img_np = np.array(img)
-
-            if pad_above_m > 0:
-                pad_above_px = int(round(pad_above_m * self.pixels_per_meter))
-                pad_above = np.zeros((pad_above_px, self.dim_pixels, 3), dtype=np.uint8)
-                pad_above = torch.from_numpy(pad_above).permute(2, 0, 1).float() / 255.0
-                img_slices.append(pad_above)
-
-            img_slice = img_np[slice_start_px:slice_end_px, :, :]
-            img_slice = torch.from_numpy(img_slice).permute(2, 0, 1).float() / 255.0
-            # img_slice = torch.zeros((3, seg_used_len_px, self.dim_pixels))
-            img_slices.append(img_slice)
-
-            if pad_below_m > 0:
-                pad_below_px = int(round(pad_below_m * self.pixels_per_meter))
-                pad_below = np.zeros((pad_below_px, self.dim_pixels, 3), dtype=np.uint8)
-                pad_below = torch.from_numpy(pad_below).permute(2, 0, 1).float() / 255.0
-                img_slices.append(pad_below)
+            seg_slices = self.get_image_slices(seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m)
+            img_slices.extend(seg_slices)
 
         img_tensor = torch.cat(img_slices, dim=1)
         return img_tensor
 
-        # seg_id = lon_neighbour["link_segment_id"]
-        # used_len = lon_neighbour["used_length"]
-        # is_current = lon_neighbour.get("is_current", False)
-        # should_slice_end = not is_current and used_len < self.link_segments.loc[seg_id]["length_proj"]
-        # if not should_slice_end:
-        #     slice_tensor = self.load_segment_image_slice(seg_id, used_len)
-        # else:
-        #     current_index = next(i for i, lon_neighbour in enumerate(lon_neighbours) if lon_neighbour["is_current"])
-        #     if not is_current:
-        #         slice_from = "top" if i > current_index else "bottom"
-        #     else:
-        #         slice_from = None
-        #     slice_tensor = self.load_segment_image_slice(seg_id, used_len, slice_from=slice_from)
-        # img_slices.append(slice_tensor)
+    def get_image_slices(self, seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m):
 
+        seg = self.link_segments.loc[seg_id]
+        camera_id = seg["camera_point_id"]
+        slice_len_m = slice_end_m - slice_start_m
 
-        # row = self.link_segments.loc[link_segment_id]
-        # camera_id = row["camera_point_id"]
-        # segment_length = row["length_proj"]
-        # camera_offset = row.get("camera_point_offset", 0.0)
-        # pixels_per_meter = self.pixels_per_meter
-        # slice_height = int(round(used_length * pixels_per_meter))
+        slice_start_px = int(round((self.dim_gsdm - slice_end_m) * self.pixels_per_meter))
+        slice_end_px = int(round((self.dim_gsdm - slice_start_m) * self.pixels_per_meter))
 
-        # if used_length <= 0:
-        #     print(f"⚠️ Zero-length slice for {link_segment_id}, skipping")
-        #     return torch.zeros((3, 1, self.dim_pixels))
-        #
-        # if pd.isnull(camera_id):
-        #     print(f"⚠️ No camera point for {link_segment_id}, inserting blank slice")
-        #     return torch.zeros((3, slice_height, self.dim_pixels))
-        #
-        # image_path = self.image_dir / f"{camera_id}.png"
-        # if not image_path.exists():
-        #     print(f"⚠️ Missing image {image_path.name}, inserting blank slice")
-        #     return torch.zeros((3, slice_height, self.dim_pixels))
-        #
-        # # Load and resize
-        # img = Image.open(image_path).convert("RGB").resize((self.dim_pixels, self.dim_pixels))
-        # img_np = np.array(img)
+        seg_slices = []
 
-        # # Crop based on camera point offset
-        # center_pixel = int((self.dim_gsdm / 2 + camera_offset) * pixels_per_meter)
-        # visible_height = int(round(segment_length * pixels_per_meter))
-        # start = max(0, center_pixel - visible_height // 2)
-        # end = min(self.dim_pixels, start + visible_height)
-        # cropped = img_np[start:end, :, :]
-        #
-        # # Apply top/bottom slicing
-        # if slice_from == "top":
-        #     sliced = cropped[:slice_height, :, :]
-        #     pad = slice_height - sliced.shape[0]
-        #     if pad > 0:
-        #         sliced = np.vstack([
-        #             sliced,
-        #             np.zeros((pad, self.dim_pixels, 3), dtype=np.uint8)
-        #         ])
-        # elif slice_from == "bottom":
-        #     sliced = cropped[-slice_height:, :, :]
-        #     pad = slice_height - sliced.shape[0]
-        #     if pad > 0:
-        #         sliced = np.vstack([
-        #             np.zeros((pad, self.dim_pixels, 3), dtype=np.uint8),
-        #             sliced
-        #         ])
-        # else:
-        #     # For current segment or exact fit
-        #     pad = slice_height - cropped.shape[0]
-        #     if pad > 0:
-        #         pad_top = pad // 2
-        #         pad_bottom = pad - pad_top
-        #         sliced = np.vstack([
-        #             np.zeros((pad_top, self.dim_pixels, 3), dtype=np.uint8),
-        #             cropped,
-        #             np.zeros((pad_bottom, self.dim_pixels, 3), dtype=np.uint8)
-        #         ])
-        #     else:
-        #         sliced = cropped
+        if slice_len_m <= 0:
+            print(f"⚠️ Zero-length slice for {seg_id}, skipping")
+            return torch.zeros((3, 1, self.dim_pixels))
 
-        # Convert to tensor
-        # img_crop_tensor = torch.from_numpy(sliced).permute(2, 0, 1).float() / 255.0
-        # return img_crop_tensor
+        if pd.isnull(camera_id):
+            slice_len_px = int(round((pad_above_m + slice_len_m + pad_below_m) * self.pixels_per_meter))
+            print(f"⚠️ No camera point for {seg_id}, inserting blank slice")
+            return torch.zeros((3, slice_len_px, self.dim_pixels))
+
+        image_path = self.image_dir / f"{camera_id}.png"
+        if not image_path.exists():
+            slice_len_px = int(round((pad_above_m + slice_len_m + pad_below_m) * self.pixels_per_meter))
+            print(f"⚠️ Missing image {image_path.name}, inserting blank slice")
+            return torch.zeros((3, slice_len_px, self.dim_pixels))
+
+        # Load and resize
+        img = Image.open(image_path).convert("RGB").resize((self.dim_pixels, self.dim_pixels))
+        img_np = np.array(img)
+
+        if pad_above_m > 0:
+            pad_above_px = int(round(pad_above_m * self.pixels_per_meter))
+            pad_above = np.zeros((pad_above_px, self.dim_pixels, 3), dtype=np.uint8)
+            pad_above = torch.from_numpy(pad_above).permute(2, 0, 1).float() / 255.0
+            seg_slices.append(pad_above)
+
+        img_slice = img_np[slice_start_px:slice_end_px, :, :]
+        img_slice = torch.from_numpy(img_slice).permute(2, 0, 1).float() / 255.0
+        seg_slices.append(img_slice)
+
+        if pad_below_m > 0:
+            pad_below_px = int(round(pad_below_m * self.pixels_per_meter))
+            pad_below = np.zeros((pad_below_px, self.dim_pixels, 3), dtype=np.uint8)
+            pad_below = torch.from_numpy(pad_below).permute(2, 0, 1).float() / 255.0
+            seg_slices.append(pad_below)
+
+        return seg_slices
 
     def load_segment_predictions_slice(
             self,
