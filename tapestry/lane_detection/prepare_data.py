@@ -55,11 +55,11 @@ def main(
         (all_link_segments["camera_point_id"].notnull())
     ].copy()
     annotated_link_segments.to_parquet(GEOMETRY_DIR / "link_segments_annotated.parquet")
+    print(f"✅ Filtered to {len(annotated_link_segments)} annotated segments.")
 
-    camera_point_ids = annotated_link_segments["camera_point_id"].unique().tolist()
-    print(f"✅ Filtered to {len(annotated_link_segments)} annotated segments with {len(camera_point_ids)} unique camera points.")
+    # Step 4: Download images for camera points
+    camera_point_ids = all_link_segments["camera_point_id"].unique().tolist()
 
-    # Step 4: Download images for those camera points
     images_dir = DATA_ROOT / "lane_detection" / "images"
     if threads and threads > 0:
         download_images_for_camera_points_threaded(camera_point_ids, images_dir, max_workers=args.threads)
@@ -115,7 +115,7 @@ def main(
     print("🟡 Step 8: Extract link ordering info...")
 
     # Extract necessary fields: link_id, segment_ix_uv, segment_ix_vu, link_segment_id
-    order_df = training_link_segments[[
+    order_df = all_link_segments[[
         "link_segment_id",
         "link_id",
         "segment_ix_uv",

@@ -32,12 +32,24 @@ train_ds = LaneDetectionDataset(data_root=Path('data'), mode="train")
 inf_ds = LaneDetectionDataset(data_root=Path('data'), mode="inference")
 
 # Pick an example
-sample = train_ds[32]
-# sample = train_ds[np.random.randint(len(train_ds))]
+# sample = train_ds[102]
+sample = train_ds[np.random.randint(len(train_ds))]
 
 show_sample_with_predictions(sample)
 
 sample
+
+
+# No link malmo25_5686
+
+# malmo25_2891 not found in UV ordering for link malmo25_718
+
+#     uv_seg_order = self.link_order[link_id]["uv"]
+# KeyError: 'malmo25_1364'
+
+# ValueError: malmo25_1914 not found in UV ordering for link malmo25_451
+
+# ValueError: malmo25_19817 not found in UV ordering for link malmo25_5685
 
 
 # import torchvision.transforms.functional as TF
