@@ -3,7 +3,7 @@ from torch.utils.data import Dataset
 import pandas as pd
 from shapely.geometry import LineString, Point
 from shapely.affinity import rotate
-from shapely import wkb
+from shapely import wkb, distance, centroid
 from pathlib import Path
 from PIL import Image
 import random
@@ -16,53 +16,57 @@ class LaneDetectionDataset(Dataset):
             data_root: Path,
             mode: str = "train",
             dim_pixels: int = 256,
-            dim_gsdm: float = 50.0,
-            lateral_radius: float = 50.0,
-            longitudinal_coverage: float = 25.0,
-            sample_every_meters: float = 1.0,
-            max_pad_image: float = 10.0,
+            dim_gsd: float = 50.0,
+            lat_coverage: float = 50.0,
+            lon_coverage: float = 25.0,
+            train_dist: float = 1.0,
+            max_extra_image: float = 10.0,
+            num_obj_pred_classes: int = 15,
     ):
         # Arguments
         self.data_root = Path(data_root)
         self.mode = mode
         self.dim_pixels = dim_pixels
-        self.dim_gsdm = dim_gsdm
-        self.lateral_radius = lateral_radius
-        self.longitudinal_coverage = longitudinal_coverage
-        self.max_extra_image = max_pad_image
+        self.dim_gsd = dim_gsd
+        self.lat_coverage = lat_coverage
+        self.lon_coverage = lon_coverage
+        self.max_extra_image = max_extra_image
+        self.num_obj_pred_classes = num_obj_pred_classes
 
         # Derived
-        self.pixels_per_meter = dim_pixels / dim_gsdm
+        self.pixels_per_meter = dim_pixels / dim_gsd
 
         # Directories
         self.geometry_dir = self.data_root / "lane_detection" / "geometry"
         self.image_dir = self.data_root / "lane_detection" / "images"
-        self.predictions_dir = self.data_root / "lane_detection" / "predictions"
+        self.obj_preds_dir = self.data_root / "lane_detection" / "predictions"
 
-        # Data
         # Link segments
-        df_link_segs = pd.read_parquet(self.geometry_dir / "link_segments_projected.parquet")
-        df_link_segs["geom_proj"] = df_link_segs["geom_proj"].apply(wkb.loads)
-        self.link_segments = df_link_segs.set_index("link_segment_id")
+        df_segs = pd.read_parquet(self.geometry_dir / "link_segments_projected.parquet")
+        df_segs["geom_proj"] = df_segs["geom_proj"].apply(wkb.loads)
+        self.link_segments = df_segs.set_index("link_segment_id")
+
         # Sections
         df_sections = pd.read_parquet(self.geometry_dir / "sections_projected.parquet")
         df_sections["geom_proj"] = df_sections["geom_proj"].apply(wkb.loads)
         self.sections = df_sections
-        # Neighbours
-        self.neighbours = pd.read_parquet(self.geometry_dir / "neighbours.parquet")
+
+        # Lateral neighbours
+        self.lat_neighbours = pd.read_parquet(self.geometry_dir / "neighbours.parquet")
         self.order_uv = pd.read_parquet(self.geometry_dir / "segment_order_uv.parquet")
         self.order_vu = pd.read_parquet(self.geometry_dir / "segment_order_vu.parquet")
+
         # Object predictions
-        self.predictions = self._load_all_predictions()
+        self.obj_predictions = self._load_all_obj_preds()
 
         # Build link_id to ordered segments map
         self.link_order = self._build_link_order()
 
         # Build index of samples (link_segment_id, geometry length)
         if self.mode == "inference":
-            self.samples = self._build_sample_index(sample_every_meters)
+            self.samples = self._build_sample_index(train_dist)
         else:
-            self.samples = list(df_link_segs.loc[df_link_segs.is_training, 'link_segment_id'])
+            self.samples = list(df_segs.loc[df_segs.is_training, 'link_segment_id'])
 
     def _build_link_order(self):
         order = {}
@@ -73,202 +77,153 @@ class LaneDetectionDataset(Dataset):
                 order[link_id][direction] = list(group["link_segment_id"])
         return order
 
-    def _build_sample_index(self, spacing_m: float):
-        index = []
+    def _build_sample_index(self, spacing: float):
+        sample_index = []
         infer_ids = self.link_segments.index.tolist()
         for link_segment_id in infer_ids:
-            row = self.link_segments.loc[link_segment_id]
-            length = row["length_proj"]
-            num_samples = max(int(length // spacing_m), 1)
-            distances = np.linspace(0, length, num=num_samples, endpoint=False)
-            for d in distances:
-                index.append((link_segment_id, d))
-        return index
+            seg = self.link_segments.loc[link_segment_id]
+            seg_len = seg["length_proj"]
+            num_samples = max(int(seg_len // spacing), 1)
+            ds = np.linspace(0, seg_len, num=num_samples, endpoint=False)
+            for d in ds:
+                sample_index.append((link_segment_id, d))
+        return sample_index
 
-    def _load_all_predictions(self):
-        predictions = {}
-        for path in self.predictions_dir.glob("*.parquet"):
+    def _load_all_obj_preds(self):
+        obj_preds = {}
+        for path in self.obj_preds_dir.glob("*.parquet"):
             df = pd.read_parquet(path)
             for cam_id, group in df.groupby("camera_point_id"):
-                predictions[cam_id] = group
-        return predictions
+                obj_preds[cam_id] = group
+        return obj_preds
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         if self.mode == "inference":
-            link_segment_id, distance = self.samples[idx]
-            seg = self.link_segments.loc[link_segment_id]
+            seg_id, distance_along = self.samples[idx]
+            seg = self.link_segments.loc[seg_id]
         else:
-            link_segment_id = self.samples[idx]
-            seg = self.link_segments.loc[link_segment_id]
-            distance = random.uniform(0.0, seg["length_proj"])
-            # distance = 10
+            seg_id = self.samples[idx]
+            seg = self.link_segments.loc[seg_id]
+            distance_along = random.uniform(0.0, seg["length_proj"])
 
         # Get link segment data
         seg_geom = seg['geom_proj']
         seg_len = seg['length_proj']
-        seg_link_id = seg['link_id']
-        sample_point = seg_geom.interpolate(distance)
+        link_id = seg['link_id']
+        sample_point = seg_geom.interpolate(distance_along)
 
         # Placeholder tensors
         heatmap_tensor = torch.zeros((1, 50))
         neighbor_proj = torch.zeros((1, 50))
 
-        # Cross-sectional line to get lateral neighbours and section labels
-        tangent = seg_geom.interpolate(min(distance + 0.1, seg_geom.length))
-        dx = tangent.x - sample_point.x
-        dy = tangent.y - sample_point.y
-        angle = np.degrees(np.arctan2(dy, dx)) + 90
-        cross_section = LineString([
-            (sample_point.x - self.lateral_radius, sample_point.y),
-            (sample_point.x + self.lateral_radius, sample_point.y)
-        ])
-        cross_section = rotate(cross_section, angle, origin=sample_point)
+        # # Cross-sectional line to get lateral neighbours and section labels
+        cross_section = self.get_cross_section(seg_geom, distance_along, sample_point)
 
-        # Get context segments
-        lon_neighbours, lat_neighbours = self.get_neighbours(link_segment_id, distance, cross_section)
+        # Get neighbours
+        lat_neighbours = self.get_lat_neighbours(seg_id, cross_section)
+        lon_neighbours = self.get_lon_neighbours(seg_id, distance_along)
+        self.check_lon_continuity(link_id, lon_neighbours)
 
         # Get used lengths
-        used_preceding_length = 0
-        used_proceeding_length = 0
-        for lon_neighbour in lon_neighbours:
-            if lon_neighbour['placement'] == 'preceding':
-                used_preceding_length += lon_neighbour['used_length']
-            elif lon_neighbour['placement'] == 'proceeding':
-                used_proceeding_length += lon_neighbour['used_length']
-            elif lon_neighbour['placement'] == 'current':
-                used_preceding_length += min(distance, self.longitudinal_coverage)
-                used_proceeding_length += min(seg_len - distance, self.longitudinal_coverage)
+        used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, distance_along, seg_len)
 
-        # Get composite image
-
-        # Ensure longitudinal continuity
-        lon_neighbour_order = self.link_order[seg_link_id]["uv"]
-        indices = [lon_neighbour_order.index(lon_neighbour["link_segment_id"]) for lon_neighbour in lon_neighbours]
-        if any(b - a != 1 for a, b in zip(indices, indices[1:])):
-            raise ValueError(f"Discontinuous link segment sequence in longitudinal context: {indices}")
+        #  Get labels
+        sections = self.get_sections(seg_id, cross_section)
 
         # Get slice data
-        image_tensor, opred_df = self.get_slice_data(lon_neighbours, used_preceding_length, used_proceeding_length)
-
-        # prediction_slices = []
-        # offset_y = 0
-        # for i, lon_neighbour in enumerate(lon_neighbours):
-        #     seg_id = lon_neighbour["link_segment_id"]
-        #     is_current = lon_neighbour.get("is_current", False)
-        #     used_len = lon_neighbour["used_length"]
-        #     segment_len = self.link_segments.loc[seg_id]["length_proj"]
-        #
-        #     current_index = next(i for i, seg in enumerate(lon_neighbours) if seg['placement'] == 'current')
-        #     if not is_current and used_len < segment_len:
-        #         slice_from = "top" if i < current_index else "bottom"
-        #     else:
-        #         slice_from = None
-        #
-        #     df_preds = self.load_segment_predictions_slice(
-        #         link_segment_id=seg_id,
-        #         used_length=used_len,
-        #         segment_length=segment_len,
-        #         slice_from=slice_from
-        #     )
-        #     if not df_preds.empty:
-        #         df_preds["y_center"] += offset_y
-        #         prediction_slices.append(df_preds)
-        #
-        #     offset_y += int(round(used_len * self.pixels_per_meter))
-        # prediction_slices = prediction_slices[::-1]
-        #
-        # if prediction_slices:
-        #     all_predictions = pd.concat(prediction_slices, ignore_index=True)
-        # else:
-        #     all_predictions = pd.DataFrame()
-
-        # Get labels
-        label_forward, label_backward = self.label_from_sections(link_segment_id, cross_section)
+        image_tensor, obj_preds_df = self.get_slice_data(lon_neighbours, used_pre_len, used_pro_len)
 
         return {
             "image": image_tensor,
             "heatmap": heatmap_tensor,
             "neighbors": neighbor_proj,
-            "forward_lane_count": torch.tensor(label_forward),
-            "backward_lane_count": torch.tensor(label_backward),
-            "link_segment_id": link_segment_id,
-            "sample_distance": distance,
+            "sections": sections,
+            "link_segment_id": seg_id,
+            "sample_distance": distance_along,
             "lon_neighbours": lon_neighbours,
             "lat_neighbours": lat_neighbours,
             "image_tensor": image_tensor,
-            "object_predictions": opred_df,
+            "object_predictions": obj_preds_df,
             "cross_section": cross_section,
         }
 
-    def get_neighbours(
-            self,
-            current_seg_id: str,
-            distance_along: float,
-            cross_section: LineString,
-    ):
-        """
-        Get neighboring segments in both longitudinal and lateral directions.
+    def get_cross_section(self, seg_geom, distance_along, sample_point):
+        tangent = seg_geom.interpolate(min(distance_along + 0.1, seg_geom.length))
+        dx = tangent.x - sample_point.x
+        dy = tangent.y - sample_point.y
+        angle = np.degrees(np.arctan2(dy, dx)) + 90
+        cross_section = LineString([
+            (sample_point.x - self.lat_coverage, sample_point.y),
+            (sample_point.x + self.lat_coverage, sample_point.y)
+        ])
+        cross_section = rotate(cross_section, angle, origin=sample_point)
+        return cross_section
 
-        Returns:
-            longitudinal_neighbours: list of dicts with keys:
-                - link_segment_id
-                - geometry (LineString)
-                - used_length (float) — how much of this segment will be used
-            lateral_neighbours: list of dicts with keys:
-                - neighbor_segment_id
-                - intersection_point (Point or MultiPoint)
-        """
-        # Unpack
+    def get_lat_neighbours(self, current_seg_id: str, cross_section: LineString):
+        subset = self.lat_neighbours[self.lat_neighbours["link_segment_id"] == current_seg_id]
+        lat_neighbours = []
+        for _, lat_seg in subset.iterrows():
+            lat_seg_id = lat_seg["neighbor_segment_id"]
+            lat_seg_geom = self.link_segments.loc[lat_seg_id]["geom_proj"]
+            intersection = lat_seg_geom.intersection(cross_section)
+            if not intersection.is_empty:
+                lat_neighbours.append({
+                    "neighbor_segment_id": lat_seg_id,
+                    "intersection_point": intersection
+                })
+
+        return lat_neighbours
+
+    def get_lon_neighbours(self, current_seg_id: str, distance_along: float):
+
         current_seg = self.link_segments.loc[current_seg_id]
         link_id: LineString = current_seg["link_id"]
         current_seg_len: LineString = current_seg["length_proj"]
 
-        # Longitudinal neighbors — always use segment_order_uv
         uv_seg_order = self.link_order[link_id]["uv"]
         try:
             current_idx = uv_seg_order.index(current_seg_id)
         except ValueError:
             raise ValueError(f"{current_seg_id} not found in UV ordering for link {link_id}")
 
+        lon_neighbours = []
+
         # Preceding (bottom of image)
-        preceding = []
-        remaining_back = self.longitudinal_coverage - distance_along
+        remaining_back = self.lon_coverage - distance_along
         i = current_idx - 1
         while remaining_back > 0 and i >= 0:
             pre_seg_id = uv_seg_order[i]
             pre_seg_len = self.link_segments.loc[pre_seg_id]["length_proj"]
             pre_seg_used_len = min(pre_seg_len, remaining_back)
-            preceding.insert(0, {
+            lon_neighbours.insert(0, {
                 "link_segment_id": pre_seg_id,
                 "used_length": pre_seg_used_len,
                 "placement": "preceding",
             })
             remaining_back -= pre_seg_len
             i -= 1
-
         # Current segment
         current_seg_used_len = (
-                min(distance_along, self.longitudinal_coverage) +
-                min(current_seg_len - distance_along, self.longitudinal_coverage)
+                min(distance_along, self.lon_coverage) +
+                min(current_seg_len - distance_along, self.lon_coverage)
         )
-        current = [{
+        current = {
             "link_segment_id": current_seg_id,
             "used_length": current_seg_used_len,
             "placement": "current",
-        }]
-
+        }
+        lon_neighbours.append(current)
         # Proceeding (top of image)
-        proceeding = []
-        remaining_forward = self.longitudinal_coverage - (current_seg_len - distance_along)
+        remaining_forward = self.lon_coverage - (current_seg_len - distance_along)
         i = current_idx + 1
         while remaining_forward > 0 and i < len(uv_seg_order):
             pro_seg_id = uv_seg_order[i]
             pro_seg_len = self.link_segments.loc[pro_seg_id]["length_proj"]
             pro_seg_used_len = min(pro_seg_len, remaining_forward)
-            proceeding.append({
+            lon_neighbours.append({
                 "link_segment_id": pro_seg_id,
                 "used_length": pro_seg_used_len,
                 "placement": "proceeding",
@@ -276,67 +231,39 @@ class LaneDetectionDataset(Dataset):
             remaining_forward -= pro_seg_len
             i += 1
 
-        # Final stack: top-to-bottom = proceeding + current + preceding
-        longitudinal_neighbours = preceding + current + proceeding
+        return lon_neighbours
 
-        # Lateral neighbors — only use precomputed neighbors
-        subset = self.neighbours[self.neighbours["link_segment_id"] == current_seg_id]
-        lateral_neighbours = []
-        for _, lat_seg in subset.iterrows():
-            lat_seg_id = lat_seg["neighbor_segment_id"]
-            lat_seg_geom = self.link_segments.loc[lat_seg_id]["geom_proj"]
-            intersection = lat_seg_geom.intersection(cross_section)
-            if not intersection.is_empty:
-                lateral_neighbours.append({
-                    "neighbor_segment_id": lat_seg_id,
-                    "intersection_point": intersection
-                })
+    def get_used_lengths(self, lon_neighbours, distance_along, seg_len):
+        used_pre_len = 0
+        used_pro_len = 0
+        for ln in lon_neighbours:
+            if ln['placement'] == 'preceding':
+                used_pre_len += ln['used_length']
+            elif ln['placement'] == 'proceeding':
+                used_pro_len += ln['used_length']
+            elif ln['placement'] == 'current':
+                used_pre_len += min(distance_along, self.lon_coverage)
+                used_pro_len += min(seg_len - distance_along, self.lon_coverage)
+        return used_pre_len, used_pro_len
 
-        return longitudinal_neighbours, lateral_neighbours
+    def check_lon_continuity(self, link_id, lon_neighbours):
+        ln_order = self.link_order[link_id]["uv"]
+        seg_ixs = [ln_order.index(ln["link_segment_id"]) for ln in lon_neighbours]
+        if any(b - a != 1 for a, b in zip(seg_ixs, seg_ixs[1:])):
+            raise ValueError(f"Discontinuous link segment sequence in longitudinal context: {seg_ixs}")
 
-    def label_from_sections(self, link_segment_id: str, cross_section: LineString) -> tuple[int, int]:
-        """
-        Derives forward and backward lane counts from section geometries.
+    def get_sections(self, seg_id, cross_section):
 
-        Args:
-            link_segment_id: the segment we're sampling
-            cross_section: the cross-sectional line from the sampled point
+        sec_types = ["general_traffic_lane", "general_traffic_lane_two_way", "bus_lane"]
+        all_secs = self.sections
+        can_secs = all_secs[(all_secs["link_segment_id"] == seg_id) & (all_secs["component"].isin(sec_types))]
+        seg_secs = can_secs[can_secs["geom_proj"].apply(lambda geom: geom.intersects(cross_section))].copy()
+        seg_bear = self.link_segments.loc[seg_id]["bearing"]
+        seg_secs['bearing_diff'] = (seg_secs.bearing - seg_bear + 360) % 360
+        seg_secs['direction'] = 'backward'
+        seg_secs.loc[(seg_secs.bearing_diff < 90) | (seg_secs.bearing_diff > 270), 'direction'] = 'forward'
 
-        Returns:
-            (forward_lane_count, backward_lane_count)
-        """
-        # Filter to sections belonging to this segment
-        candidate_sections = self.sections[
-            (self.sections["link_segment_id"] == link_segment_id) &
-            (self.sections["component"].isin([
-                "general_traffic_lane",
-                "general_traffic_lane_two_way",
-                "bus_lane",
-            ]))
-            ]
-
-        # Further filter by intersection with cross-sectional line
-        matching_sections = candidate_sections[
-            candidate_sections["geom_proj"].apply(lambda geom: geom.intersects(cross_section))
-        ]
-        # Return zero if no intersections
-        if matching_sections.empty:
-            return 0, 0
-        # Extract direction
-        # Get the segment's bearing
-        segment_bearing = self.link_segments.loc[link_segment_id]["bearing"]
-        # Count by direction
-        forward = 0
-        backward = 0
-        for _, sec in matching_sections.iterrows():
-            section_bearing = sec["bearing"]
-            delta = (section_bearing - segment_bearing + 360) % 360
-            if delta < 90 or delta > 270:
-                forward += 1
-            else:
-                backward += 1
-
-        return forward, backward
+        return seg_secs
 
     def get_slice_data(
             self,
@@ -346,7 +273,7 @@ class LaneDetectionDataset(Dataset):
     ) -> torch.Tensor:
 
         img_slices = []
-        opred_slices = []
+        obj_preds_slices = []
         slice_anchor_m = 0
 
         for i, lon_neighbour in enumerate(lon_neighbours):
@@ -365,7 +292,7 @@ class LaneDetectionDataset(Dataset):
             camera_offset_m = seg.get("camera_point_offset", 0.0)
 
             # Measurement from bottom
-            img_center_m = self.dim_gsdm / 2
+            img_center_m = self.dim_gsd / 2
             seg_center_m = img_center_m - camera_offset_m
             seg_start_m = seg_center_m - seg_len_m / 2
             seg_end_m = seg_center_m + seg_len_m / 2
@@ -373,34 +300,8 @@ class LaneDetectionDataset(Dataset):
             pad_above_m = 0
             pad_below_m = 0
 
-            # if is_first and is_first_uv:
-            #     extra_needed_m = self.longitudinal_coverage - used_preceding_length
-            #     extra_img_m = min(extra_needed_m, self.max_extra_image)
-            #     slice_start_m = max(seg_end_m - seg_used_len_m - extra_img_m, 0.0)
-            #     slice_end_m = seg_end_m
-            #     slice_len_m = slice_end_m - slice_start_m
-            #     extra_img_m = slice_len_m - seg_used_len_m
-            #     pad_below_m = extra_needed_m - extra_img_m
-            # elif is_first:
-            #     slice_start_m = seg_end_m - seg_used_len_m
-            #     slice_end_m = seg_end_m
-            # elif is_last and is_last_uv:
-            #     extra_needed_m = self.longitudinal_coverage - used_proceeding_length
-            #     extra_img_m = min(extra_needed_m, self.max_extra_image)
-            #     slice_start_m = seg_start_m
-            #     slice_end_m = min(seg_start_m + seg_used_len_m + extra_img_m, self.dim_gsdm)
-            #     slice_len_m = slice_end_m - slice_start_m
-            #     extra_img_m = slice_len_m - seg_used_len_m
-            #     pad_above_m = extra_needed_m - extra_img_m
-            # elif is_last:
-            #     slice_start_m = seg_start_m
-            #     slice_end_m = seg_start_m + seg_used_len_m
-            # else:
-            #     slice_start_m = seg_start_m
-            #     slice_end_m = seg_end_m
-
             if is_first and is_first_uv:
-                extra_needed_m = self.longitudinal_coverage - used_preceding_length
+                extra_needed_m = self.lon_coverage - used_preceding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
                 slice_start_m = max(seg_end_m - seg_used_len_m - extra_img_m, 0.0)
                 slice_len_m = seg_end_m - slice_start_m
@@ -412,9 +313,9 @@ class LaneDetectionDataset(Dataset):
                 slice_start_m = seg_start_m
 
             if is_last and is_last_uv:
-                extra_needed_m = self.longitudinal_coverage - used_proceeding_length
+                extra_needed_m = self.lon_coverage - used_proceeding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
-                slice_end_m = min(seg_start_m + seg_used_len_m + extra_img_m, self.dim_gsdm)
+                slice_end_m = min(seg_start_m + seg_used_len_m + extra_img_m, self.dim_gsd)
                 slice_len_m = slice_end_m - seg_start_m
                 extra_img_m = slice_len_m - seg_used_len_m
                 pad_above_m = extra_needed_m - extra_img_m
@@ -427,18 +328,18 @@ class LaneDetectionDataset(Dataset):
             img_slices = seg_img_slices + img_slices
 
             slice_anchor_m += pad_below_m + slice_end_m - slice_start_m
-            opred_slice = self.get_opred_slice(seg_id, slice_start_m, slice_end_m, slice_anchor_m)
-            opred_slices.append(opred_slice)
+            obj_preds_slice = self.get_obj_preds_slice(seg_id, slice_start_m, slice_end_m, slice_anchor_m)
+            obj_preds_slices.append(obj_preds_slice)
             slice_anchor_m += pad_above_m
 
         img_tensor = torch.cat(img_slices, dim=1)
 
-        if opred_slices:
-            opred_df = pd.concat(opred_slices, ignore_index=True)
+        if obj_preds_slices:
+            obj_preds_df = pd.concat(obj_preds_slices, ignore_index=True)
         else:
-            opred_df = pd.DataFrame()
+            obj_preds_df = pd.DataFrame()
 
-        return img_tensor, opred_df
+        return img_tensor, obj_preds_df
 
     def get_image_slices(self, seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m):
 
@@ -446,8 +347,8 @@ class LaneDetectionDataset(Dataset):
         camera_id = seg["camera_point_id"]
         slice_len_m = slice_end_m - slice_start_m
 
-        slice_start_px = int(round((self.dim_gsdm - slice_end_m) * self.pixels_per_meter))
-        slice_end_px = int(round((self.dim_gsdm - slice_start_m) * self.pixels_per_meter))
+        slice_start_px = int(round((self.dim_gsd - slice_end_m) * self.pixels_per_meter))
+        slice_end_px = int(round((self.dim_gsd - slice_start_m) * self.pixels_per_meter))
 
         seg_slices = []
 
@@ -476,7 +377,7 @@ class LaneDetectionDataset(Dataset):
             pad_above = torch.from_numpy(pad_above).permute(2, 0, 1).float() / 255.0
             seg_slices.append(pad_above)
 
-        img_slice = img_np[slice_start_px:slice_end_px, :, :]
+        img_slice = img_np[slice_start_px:slice_end_px, :, :].copy()
         img_slice = torch.from_numpy(img_slice).permute(2, 0, 1).float() / 255.0
         seg_slices.append(img_slice)
 
@@ -488,7 +389,7 @@ class LaneDetectionDataset(Dataset):
 
         return seg_slices
 
-    def get_opred_slice(
+    def get_obj_preds_slice(
             self,
             seg_id: str,
             slice_start_m,
@@ -498,109 +399,57 @@ class LaneDetectionDataset(Dataset):
 
         seg = self.link_segments.loc[seg_id]
         camera_id = seg["camera_point_id"]
-        # camera_offset = seg.get("camera_point_offset", 0.0)
-        # pixels_per_meter = self.pixels_per_meter
 
         # Load predictions
-        preds = self.predictions.get(camera_id, pd.DataFrame())
-        if preds.empty:
-            return preds
+        obj_preds = self.obj_predictions.get(camera_id, pd.DataFrame())
+        if obj_preds.empty:
+            return obj_preds
 
         # Denormalize coordinates to pixel space
-        preds = preds.copy()
-        preds["x_center"] *= self.dim_pixels
-        preds["y_center"] *= self.dim_pixels
-        preds["width"] *= self.dim_pixels
-        preds["height"] *= self.dim_pixels
+        obj_preds = obj_preds.copy()
+        obj_preds["x_center"] *= self.dim_pixels
+        obj_preds["y_center"] *= self.dim_pixels
+        obj_preds["width"] *= self.dim_pixels
+        obj_preds["height"] *= self.dim_pixels
 
         # Compute camera-centered crop bounds (same as image)
-        slice_start_px = int(round((self.dim_gsdm - slice_end_m) * self.pixels_per_meter))
-        slice_end_px = int(round((self.dim_gsdm - slice_start_m) * self.pixels_per_meter))
-        slice_anchor_px = int(round((self.dim_gsdm - slice_anchor_m) * self.pixels_per_meter))
-
-        # center_pixel = int((segment_length / 2 - camera_offset) * pixels_per_meter)
-        # visible_height = int(round(segment_length * pixels_per_meter))
-        # start = max(0, center_pixel - visible_height // 2)
-        # end = min(self.dim_pixels, start + visible_height)
+        slice_start_px = int(round((self.dim_gsd - slice_end_m) * self.pixels_per_meter))
+        slice_end_px = int(round((self.dim_gsd - slice_start_m) * self.pixels_per_meter))
+        slice_anchor_px = int(round((self.dim_gsd - slice_anchor_m) * self.pixels_per_meter))
 
         # Filter to those inside cropped image
-        preds = preds[preds["y_center"].between(slice_start_px, slice_end_px)]
-        if preds.empty:
-            return preds
+        obj_preds = obj_preds[obj_preds["y_center"].between(slice_start_px, slice_end_px)]
+        if obj_preds.empty:
+            return obj_preds
 
-        # # Apply partial slicing
-        # slice_height = int(round(used_length * pixels_per_meter))
-        # if slice_from == "top":
-        #     slice_start = start
-        #     slice_end = start + slice_height
-        # elif slice_from == "bottom":
-        #     slice_end = end
-        #     slice_start = end - slice_height
-        # else:
-        #     slice_start = start
-        #     slice_end = end
+        obj_preds["y_center"] += slice_anchor_px - slice_start_px
 
-        # # Final filter and rebase y_center
-        # preds = preds[preds["y_center"].between(slice_start, slice_end)].copy()
-        # if preds.empty:
-        #     return preds
+        return obj_preds
 
-        preds["y_center"] += slice_anchor_px - slice_start_px
-        return preds
+    def get_side_of_line(self, start: Point, end: Point, p: Point) -> int:
+        """
+        Returns -1 for left, 1 for right, or 0 for on depending on where point p lies
+        relative to the directed line from start to end.
+        """
+        cross = (end.x - start.x) * (p.y - start.y) - (end.y - start.y) * (p.x - start.x)
+        if cross > 0:
+            return -1
+        elif cross < 0:
+            return 1
+        else:
+            return 0
 
-    # def load_segment_predictions_slice(
-    #         self,
-    #         link_segment_id: str,
-    #         used_length: float,
-    #         segment_length: float,
-    #         slice_from: str | None = None,
-    # ) -> pd.DataFrame:
-    #
-    #     row = self.link_segments.loc[link_segment_id]
-    #     camera_id = row["camera_point_id"]
-    #     camera_offset = row.get("camera_point_offset", 0.0)
-    #     pixels_per_meter = self.pixels_per_meter
-    #
-    #     # Load predictions
-    #     preds = self.predictions.get(camera_id, pd.DataFrame())
-    #     if preds.empty:
-    #         return preds
-    #
-    #     # Denormalize coordinates to pixel space
-    #     preds = preds.copy()
-    #     preds["x_center"] *= self.dim_pixels
-    #     preds["y_center"] *= self.dim_pixels
-    #     preds["width"] *= self.dim_pixels
-    #     preds["height"] *= self.dim_pixels
-    #
-    #     # Compute camera-centered crop bounds (same as image)
-    #     center_pixel = int((segment_length / 2 - camera_offset) * pixels_per_meter)
-    #     visible_height = int(round(segment_length * pixels_per_meter))
-    #     start = max(0, center_pixel - visible_height // 2)
-    #     end = min(self.dim_pixels, start + visible_height)
-    #
-    #     # Filter to those inside cropped image
-    #     preds = preds[preds["y_center"].between(start, end)]
-    #     if preds.empty:
-    #         return preds
-    #
-    #     # Apply partial slicing
-    #     slice_height = int(round(used_length * pixels_per_meter))
-    #     if slice_from == "top":
-    #         slice_start = start
-    #         slice_end = start + slice_height
-    #     elif slice_from == "bottom":
-    #         slice_end = end
-    #         slice_start = end - slice_height
-    #     else:
-    #         slice_start = start
-    #         slice_end = end
-    #
-    #     # Final filter and rebase y_center
-    #     preds = preds[preds["y_center"].between(slice_start, slice_end)].copy()
-    #     if preds.empty:
-    #         return preds
-    #
-    #     preds["y_center"] -= slice_start  # align to top of slice
-    #     return preds
+    def project_points(self, seg_id, sample_point, intersection_points):
 
+        seg = self.link_segments.loc[seg_id]
+        seg_geom = seg["geom_proj"]
+        seg_start, seg_end = seg_geom.boundary
+
+        ips_proj = []
+        for ip in intersection_points:
+            lat_neighbour_geom = ip['intersection_point']
+            x_offset_abs = distance(lat_neighbour_geom, sample_point)
+            x_offset = self.get_side_of_line(seg_start, seg_end, sample_point) * x_offset_abs
+            ips_proj.append(x_offset)
+
+        return  ips_proj
