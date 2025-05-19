@@ -122,16 +122,16 @@ class LaneDetectionDataset(Dataset):
         # # Cross-sectional line to get lateral neighbours and section labels
         cross_section = self.get_cross_section(seg_geom, distance_along, sample_point)
 
+        #  Get labels
+        sections = self.get_sections(seg_id, sample_point, cross_section)
+
         # Get neighbours
-        lat_neighbours = self.get_lat_neighbours(seg_id, cross_section)
+        lat_neighbours = self.get_lat_neighbours(seg_id, sample_point, cross_section)
         lon_neighbours = self.get_lon_neighbours(seg_id, distance_along)
         self.check_lon_continuity(link_id, lon_neighbours)
 
         # Get used lengths
         used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, distance_along, seg_len)
-
-        #  Get labels
-        sections = self.get_sections(seg_id, cross_section)
 
         # Get slice data
         image_tensor, obj_preds_df = self.get_slice_data(lon_neighbours, used_pre_len, used_pro_len)
@@ -162,19 +162,50 @@ class LaneDetectionDataset(Dataset):
         cross_section = rotate(cross_section, angle, origin=sample_point)
         return cross_section
 
-    def get_lat_neighbours(self, current_seg_id: str, cross_section: LineString):
-        subset = self.lat_neighbours[self.lat_neighbours["link_segment_id"] == current_seg_id]
-        lat_neighbours = []
-        for _, lat_seg in subset.iterrows():
-            lat_seg_id = lat_seg["neighbor_segment_id"]
-            lat_seg_geom = self.link_segments.loc[lat_seg_id]["geom_proj"]
-            intersection = lat_seg_geom.intersection(cross_section)
-            if not intersection.is_empty:
-                lat_neighbours.append({
-                    "neighbor_segment_id": lat_seg_id,
-                    "intersection_point": intersection
-                })
+    @staticmethod
+    def get_side_of_line(point, line):
+        start = Point(line.coords[0])
+        end = Point(line.coords[-1])
+        cross = (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x)
+        if cross > 0:
+            return -1
+        elif cross < 0:
+            return 1
+        else:
+            return 0
 
+    def get_intersecting(self, df, seg_geom, sample_point, cross_section, geom_col='geom_proj'):
+        df['intersection_point'] = df[geom_col].apply(lambda x: x.intersection(cross_section))
+        # TODO Change to accommodate multi-point?
+        df = df[df.intersection_point.apply(lambda x: x.geom_type) == 'Point'].copy()
+        df['x_offset_abs'] = df.intersection_point.apply(lambda x: distance(x, sample_point))
+        df['x_offset'] = df.intersection_point.apply(lambda x: self.get_side_of_line(x, seg_geom)) * df.x_offset_abs
+        return df
+
+    def get_sections(self, seg_id, sample_point, cross_section):
+
+        seg = self.link_segments.loc[seg_id]
+        seg_geom = seg['geom_proj']
+
+        sec_types = ["general_traffic_lane", "general_traffic_lane_two_way", "bus_lane"]
+        all_secs = self.sections
+        can_secs = all_secs[(all_secs["link_segment_id"] == seg_id) & (all_secs["component"].isin(sec_types))].copy()
+        seg_secs = self.get_intersecting(can_secs, seg_geom, sample_point, cross_section)
+        seg_bear = self.link_segments.loc[seg_id]["bearing"]
+        seg_secs['bearing_diff'] = (seg_secs.bearing - seg_bear + 360) % 360
+        seg_secs['direction'] = 'backward'
+        seg_secs.loc[(seg_secs.bearing_diff < 90) | (seg_secs.bearing_diff > 270), 'direction'] = 'forward'
+
+        return seg_secs
+
+    def get_lat_neighbours(self, seg_id, sample_point, cross_section):
+
+        seg = self.link_segments.loc[seg_id]
+        seg_geom = seg['geom_proj']
+
+        lat_neighbour_ids = self.lat_neighbours[self.lat_neighbours["link_segment_id"] == seg_id]
+        lat_segs = self.link_segments[self.link_segments.index.isin(lat_neighbour_ids.neighbor_segment_id)].copy()
+        lat_neighbours = self.get_intersecting(lat_segs, seg_geom, sample_point, cross_section)
         return lat_neighbours
 
     def get_lon_neighbours(self, current_seg_id: str, distance_along: float):
@@ -205,6 +236,7 @@ class LaneDetectionDataset(Dataset):
             })
             remaining_back -= pre_seg_len
             i -= 1
+
         # Current segment
         current_seg_used_len = (
                 min(distance_along, self.lon_coverage) +
@@ -216,6 +248,7 @@ class LaneDetectionDataset(Dataset):
             "placement": "current",
         }
         lon_neighbours.append(current)
+
         # Proceeding (top of image)
         remaining_forward = self.lon_coverage - (current_seg_len - distance_along)
         i = current_idx + 1
@@ -252,25 +285,12 @@ class LaneDetectionDataset(Dataset):
         if any(b - a != 1 for a, b in zip(seg_ixs, seg_ixs[1:])):
             raise ValueError(f"Discontinuous link segment sequence in longitudinal context: {seg_ixs}")
 
-    def get_sections(self, seg_id, cross_section):
-
-        sec_types = ["general_traffic_lane", "general_traffic_lane_two_way", "bus_lane"]
-        all_secs = self.sections
-        can_secs = all_secs[(all_secs["link_segment_id"] == seg_id) & (all_secs["component"].isin(sec_types))]
-        seg_secs = can_secs[can_secs["geom_proj"].apply(lambda geom: geom.intersects(cross_section))].copy()
-        seg_bear = self.link_segments.loc[seg_id]["bearing"]
-        seg_secs['bearing_diff'] = (seg_secs.bearing - seg_bear + 360) % 360
-        seg_secs['direction'] = 'backward'
-        seg_secs.loc[(seg_secs.bearing_diff < 90) | (seg_secs.bearing_diff > 270), 'direction'] = 'forward'
-
-        return seg_secs
-
     def get_slice_data(
             self,
             lon_neighbours: list[dict],
             used_preceding_length: float,
             used_proceeding_length: float,
-    ) -> torch.Tensor:
+    ):
 
         img_slices = []
         obj_preds_slices = []
@@ -335,11 +355,11 @@ class LaneDetectionDataset(Dataset):
         img_tensor = torch.cat(img_slices, dim=1)
 
         if obj_preds_slices:
-            obj_preds_df = pd.concat(obj_preds_slices, ignore_index=True)
+            obj_preds = pd.concat(obj_preds_slices, ignore_index=True)
         else:
-            obj_preds_df = pd.DataFrame()
+            obj_preds = pd.DataFrame()
 
-        return img_tensor, obj_preds_df
+        return img_tensor, obj_preds
 
     def get_image_slices(self, seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m):
 
@@ -426,18 +446,7 @@ class LaneDetectionDataset(Dataset):
 
         return obj_preds
 
-    def get_side_of_line(self, start: Point, end: Point, p: Point) -> int:
-        """
-        Returns -1 for left, 1 for right, or 0 for on depending on where point p lies
-        relative to the directed line from start to end.
-        """
-        cross = (end.x - start.x) * (p.y - start.y) - (end.y - start.y) * (p.x - start.x)
-        if cross > 0:
-            return -1
-        elif cross < 0:
-            return 1
-        else:
-            return 0
+
 
     def project_points(self, seg_id, sample_point, intersection_points):
 
