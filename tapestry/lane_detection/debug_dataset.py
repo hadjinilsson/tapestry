@@ -32,7 +32,7 @@ train_ds = LaneDetectionDataset(data_root=Path('data'), mode="train")
 inf_ds = LaneDetectionDataset(data_root=Path('data'), mode="inference")
 
 # Pick an example
-# sample = train_ds[102]
+# sample = train_ds[58]
 sample = train_ds[np.random.randint(len(train_ds))]
 
 show_sample_with_predictions(sample)
@@ -41,6 +41,7 @@ sample
 
 
 # 23823
+# 20043
 
 
 # import torchvision.transforms.functional as TF

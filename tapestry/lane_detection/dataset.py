@@ -8,6 +8,9 @@ from pathlib import Path
 from PIL import Image
 import random
 import numpy as np
+import torchvision.transforms.functional as TF
+import torchvision.transforms as T
+from torchvision.transforms.functional import to_pil_image, to_tensor
 
 
 class LaneDetectionDataset(Dataset):
@@ -37,6 +40,7 @@ class LaneDetectionDataset(Dataset):
 
         # Derived
         self.pixels_per_meter = dim_pixels / dim_gsd
+        self.enable_flip = (self.mode == "train")
 
         # Directories
         self.geometry_dir = self.data_root / "lane_detection" / "geometry"
@@ -136,7 +140,23 @@ class LaneDetectionDataset(Dataset):
         used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, distance_along, seg_len)
 
         # Get slice data
-        img, obj_preds = self.get_slice_data(lon_neighbours, used_pre_len, used_pro_len)
+        img, obj_preds = self.get_slice_data(lon_neighbours, distance_along, used_pre_len, used_pro_len)
+
+        # Image augmentations
+        if self.mode == "train":
+            brightness_factor = random.uniform(0.8, 1.2)
+            contrast_factor = random.uniform(0.8, 1.2)
+            img = TF.adjust_brightness(img, brightness_factor)
+            img = TF.adjust_contrast(img, contrast_factor)
+
+        if self.mode == "train":
+            noise = torch.randn_like(img) * 0.02
+            img = torch.clamp(img + noise, 0.0, 1.0)
+
+        if self.mode == "train" and random.random() < 0.3:
+            img = to_pil_image(img)
+            img = T.GaussianBlur(kernel_size=3)(img)
+            img = to_tensor(img)
 
         # Lateral shift
         if self.mode == "train" and self.max_shift > 0:
@@ -153,6 +173,16 @@ class LaneDetectionDataset(Dataset):
         # Sift lateral neighbours
         lat_neighbours = self.shift_points(lat_neighbours, shift, self.lat_coverage)
 
+        # Vertical flip
+        flip = self.enable_flip and random.random() < 0.5
+        if flip:
+            img = torch.flip(img, dims=[1, 2])
+            obj_preds["y_center"] = self.dim_pixels - obj_preds["y_center"]
+            obj_preds["x_center"] = self.dim_pixels - obj_preds["x_center"]
+            sections['direction'] = sections.direction.map({'forward': 'backward', 'backward': 'forward'})
+            sections['x_offset'] *= -1
+            lat_neighbours['x_offset'] *= -1
+
         return {
             "image": img,
             "heatmap": heatmap_tensor,
@@ -165,6 +195,7 @@ class LaneDetectionDataset(Dataset):
             "object_predictions": obj_preds,
             "cross_section": cross_section,
             "shift": shift,
+            "flip": flip,
         }
 
     def get_cross_section(self, seg_geom, distance_along, sample_point):
@@ -305,6 +336,7 @@ class LaneDetectionDataset(Dataset):
     def get_slice_data(
             self,
             lon_neighbours: list[dict],
+            distance_along: float,
             used_preceding_length: float,
             used_proceeding_length: float,
     ):
@@ -317,6 +349,7 @@ class LaneDetectionDataset(Dataset):
 
             is_first = i == 0
             is_last = i == (len(lon_neighbours) - 1)
+            is_current = lon_neighbour['placement'] == 'current'
 
             seg_id = lon_neighbour["link_segment_id"]
             seg = self.link_segments.loc[seg_id]
@@ -340,9 +373,12 @@ class LaneDetectionDataset(Dataset):
             if is_first and is_first_uv:
                 extra_needed_m = self.lon_coverage - used_preceding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
-                slice_start_m = max(seg_end_m - seg_used_len_m - extra_img_m, 0.0)
-                slice_len_m = seg_end_m - slice_start_m
-                extra_img_m = slice_len_m - seg_used_len_m
+                if is_current:
+                    extra_img_m += min(seg_start_m + distance_along - used_preceding_length - extra_img_m, 0)
+                    slice_start_m = seg_start_m + distance_along - used_preceding_length - extra_img_m
+                else:
+                    extra_img_m += min(seg_end_m - seg_used_len_m - extra_img_m, 0)
+                    slice_start_m = seg_end_m - seg_used_len_m - extra_img_m
                 pad_below_m = extra_needed_m - extra_img_m
             elif is_first:
                 slice_start_m = seg_end_m - seg_used_len_m
@@ -352,9 +388,14 @@ class LaneDetectionDataset(Dataset):
             if is_last and is_last_uv:
                 extra_needed_m = self.lon_coverage - used_proceeding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
-                slice_end_m = min(seg_start_m + seg_used_len_m + extra_img_m, self.dim_gsd)
-                slice_len_m = slice_end_m - seg_start_m
-                extra_img_m = slice_len_m - seg_used_len_m
+                if is_current:
+                    extra_img_m -= max(
+                        seg_start_m + distance_along + used_proceeding_length + extra_img_m - self.dim_gsd, 0
+                    )
+                    slice_end_m = seg_start_m + distance_along + used_proceeding_length + extra_img_m
+                else:
+                    extra_img_m -= max(seg_start_m + seg_used_len_m + extra_img_m - self.dim_gsd, 0)
+                    slice_end_m = seg_start_m + seg_used_len_m + extra_img_m
                 pad_above_m = extra_needed_m - extra_img_m
             elif is_last:
                 slice_end_m = seg_start_m + seg_used_len_m
