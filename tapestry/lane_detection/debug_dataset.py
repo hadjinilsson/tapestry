@@ -6,7 +6,7 @@ import numpy as np
 
 
 def show_sample_with_predictions(sample):
-    img = sample["image_tensor"].permute(1, 2, 0).numpy()  # (H, W, 3)
+    img = sample["image"].permute(1, 2, 0).numpy()  # (H, W, 3)
     preds = sample["object_predictions"]
 
     fig, ax = plt.subplots(figsize=(6, 6))

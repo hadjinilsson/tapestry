@@ -21,6 +21,7 @@ class LaneDetectionDataset(Dataset):
             lon_coverage: float = 25.0,
             train_dist: float = 1.0,
             max_extra_image: float = 10.0,
+            max_shift: float = 10.0,
             num_obj_pred_classes: int = 15,
     ):
         # Arguments
@@ -31,6 +32,7 @@ class LaneDetectionDataset(Dataset):
         self.lat_coverage = lat_coverage
         self.lon_coverage = lon_coverage
         self.max_extra_image = max_extra_image
+        self.max_shift = max_shift
         self.num_obj_pred_classes = num_obj_pred_classes
 
         # Derived
@@ -134,10 +136,25 @@ class LaneDetectionDataset(Dataset):
         used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, distance_along, seg_len)
 
         # Get slice data
-        image_tensor, obj_preds_df = self.get_slice_data(lon_neighbours, used_pre_len, used_pro_len)
+        img, obj_preds = self.get_slice_data(lon_neighbours, used_pre_len, used_pro_len)
+
+        # Lateral shift
+        if self.mode == "train" and self.max_shift > 0:
+            shift = random.uniform(-self.max_shift, self.max_shift)
+        else:
+            shift = 0.0
+
+        # Sift image
+        img = self.shift_image(img, shift)
+        # Shift object predictions
+        obj_preds = self.shift_object_predictions(obj_preds, shift)
+        # Shift sections
+        sections = self.shift_points(sections, shift, self.dim_gsd/2)
+        # Sift lateral neighbours
+        lat_neighbours = self.shift_points(lat_neighbours, shift, self.lat_coverage)
 
         return {
-            "image": image_tensor,
+            "image": img,
             "heatmap": heatmap_tensor,
             "neighbors": neighbor_proj,
             "sections": sections,
@@ -145,9 +162,9 @@ class LaneDetectionDataset(Dataset):
             "sample_distance": distance_along,
             "lon_neighbours": lon_neighbours,
             "lat_neighbours": lat_neighbours,
-            "image_tensor": image_tensor,
-            "object_predictions": obj_preds_df,
+            "object_predictions": obj_preds,
             "cross_section": cross_section,
+            "shift": shift,
         }
 
     def get_cross_section(self, seg_geom, distance_along, sample_point):
@@ -446,19 +463,24 @@ class LaneDetectionDataset(Dataset):
 
         return obj_preds
 
+    def shift_image(self, img, shift_m):
+        shift_px = int(round(shift_m * self.pixels_per_meter))
+        if shift_px > 0:
+            pad = torch.zeros((3, img.shape[1], shift_px), dtype=img.dtype)
+            return torch.cat([pad, img[:, :, :-shift_px]], dim=2)
+        elif shift_px < 0:
+            pad = torch.zeros((3, img.shape[1], -shift_px), dtype=img.dtype)
+            return torch.cat([img[:, :, -shift_px:], pad], dim=2)
+        return img
 
+    def shift_object_predictions(self, obj_preds, shift_m):
+        shift_px = int(round(shift_m * self.pixels_per_meter))
+        obj_preds['x_center'] += shift_px
+        obj_preds = obj_preds[obj_preds["x_center"].between(0, self.dim_pixels)].copy()
+        return obj_preds
 
-    def project_points(self, seg_id, sample_point, intersection_points):
-
-        seg = self.link_segments.loc[seg_id]
-        seg_geom = seg["geom_proj"]
-        seg_start, seg_end = seg_geom.boundary
-
-        ips_proj = []
-        for ip in intersection_points:
-            lat_neighbour_geom = ip['intersection_point']
-            x_offset_abs = distance(lat_neighbour_geom, sample_point)
-            x_offset = self.get_side_of_line(seg_start, seg_end, sample_point) * x_offset_abs
-            ips_proj.append(x_offset)
-
-        return  ips_proj
+    @staticmethod
+    def shift_points(df, shift, max_offset, col='x_offset'):
+        df[col] += shift
+        df = df[df[col].between(-max_offset, max_offset)].copy()
+        return df
