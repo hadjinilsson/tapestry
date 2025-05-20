@@ -20,9 +20,10 @@ class LaneDetectionDataset(Dataset):
             mode: str = "train",
             dim_pixels: int = 256,
             dim_gsd: float = 50.0,
-            lat_coverage: float = 50.0,
+            dim_bins: float = 1.0,
+            lat_coverage: float = 35.0,
             lon_coverage: float = 25.0,
-            train_dist: float = 1.0,
+            infer_dist: float = 1.0,
             max_extra_image: float = 10.0,
             max_shift: float = 10.0,
             num_obj_pred_classes: int = 15,
@@ -32,6 +33,7 @@ class LaneDetectionDataset(Dataset):
         self.mode = mode
         self.dim_pixels = dim_pixels
         self.dim_gsd = dim_gsd
+        self.dim_bins = dim_bins
         self.lat_coverage = lat_coverage
         self.lon_coverage = lon_coverage
         self.max_extra_image = max_extra_image
@@ -41,6 +43,7 @@ class LaneDetectionDataset(Dataset):
         # Derived
         self.pixels_per_meter = dim_pixels / dim_gsd
         self.enable_flip = (self.mode == "train")
+        self.num_bins = int(round(dim_gsd / dim_bins))
 
         # Directories
         self.geometry_dir = self.data_root / "lane_detection" / "geometry"
@@ -70,7 +73,7 @@ class LaneDetectionDataset(Dataset):
 
         # Build index of samples (link_segment_id, geometry length)
         if self.mode == "inference":
-            self.samples = self._build_sample_index(train_dist)
+            self.samples = self._build_sample_index(infer_dist)
         else:
             self.samples = list(df_segs.loc[df_segs.is_training, 'link_segment_id'])
 
@@ -182,6 +185,11 @@ class LaneDetectionDataset(Dataset):
             sections['direction'] = sections.direction.map({'forward': 'backward', 'backward': 'forward'})
             sections['x_offset'] *= -1
             lat_neighbours['x_offset'] *= -1
+
+        # Format data
+        obj_preds = self.format_object_predictions(obj_preds)
+        lat_neighbours = self.format_lat_neighbours(lat_neighbours)
+        sections = sections.groupby('direction')['direction'].count().reindex(['forward', 'backward'], fill_value=0)
 
         return {
             "image": img,
@@ -525,3 +533,44 @@ class LaneDetectionDataset(Dataset):
         df[col] += shift
         df = df[df[col].between(-max_offset, max_offset)].copy()
         return df
+
+    def format_object_predictions(self, obj_preds):
+
+        # Normalize to projected space
+        obj_preds[['x_center', 'y_center', 'width', 'height']] /= (self.pixels_per_meter * self.dim_bins)
+        obj_preds['score'] = obj_preds['confidence'] * obj_preds['height']
+        obj_preds['score'] /= np.abs(obj_preds['y_center'] - self.lon_coverage)
+        obj_preds['x_start'] = obj_preds['x_center'] - obj_preds['width'] / 2
+        obj_preds['x_end'] = obj_preds['x_center'] + obj_preds['width'] / 2
+
+        # Create slot edges
+        slots = np.linspace(0, self.lat_coverage, num=self.num_bins + 1)
+        slot_centers = (slots[:-1] + slots[1:]) / 2
+
+        # Broadcast x_start and x_end to slots
+        x_start = obj_preds['x_start'].values[:, np.newaxis]
+        x_end = obj_preds['x_end'].values[:, np.newaxis]
+        score = obj_preds['score'].values[:, np.newaxis]
+
+        # Check which slots fall within each object bbox (N objects × 50 slots)
+        mask = (slot_centers >= x_start) & (slot_centers <= x_end)
+        slot_matrix = mask * score  # Broadcasted score per slot if in range
+
+        # Add as individual columns
+        slot_cols = []
+        for i in range(self.num_bins):
+            col_name = f"slot_{i}"
+            obj_preds[col_name] = slot_matrix[:, i]
+            slot_cols.append(col_name)
+
+        #  Group by object class and expand
+        obj_preds = obj_preds.groupby('class')[slot_cols].sum().reindex(range(self.num_obj_pred_classes), fill_value=0)
+
+        return obj_preds
+
+    def format_lat_neighbours(self, lat_neighbours):
+        lat_neighbours['x_offset'] += self.lat_coverage
+        lat_neighbour_pos = lat_neighbours.x_offset.round().astype(int).unique()
+        lat_neighbours = np.zeros(round(self.lat_coverage * 2), dtype=int)
+        lat_neighbours[lat_neighbour_pos] = 1
+        return lat_neighbours
