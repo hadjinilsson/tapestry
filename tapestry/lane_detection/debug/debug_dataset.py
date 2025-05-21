@@ -23,7 +23,7 @@ def show_sample_with_predictions(sample):
         )
         ax.add_patch(rect)
 
-    ax.set_title(f"Link Segment: {sample['link_segment_id']}")
+    ax.set_title(f"Link Segment: {sample['numerical_id']}")
     plt.axis("off")
     plt.tight_layout()
     plt.show()
@@ -33,7 +33,7 @@ inf_ds = LaneDetectionDataset(data_root=Path('data'), mode="inference")
 
 stats = train_ds.compute_statistics()
 
-sample = train_ds[58]
+# sample = train_ds[58]
 sample = train_ds[np.random.randint(len(train_ds))]
 
 show_sample_with_predictions(sample)

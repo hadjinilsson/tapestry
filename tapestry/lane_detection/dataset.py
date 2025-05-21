@@ -195,11 +195,14 @@ class LaneDetectionDataset(Dataset):
         lat_neighbours = self.format_lat_neighbours(lat_neighbours)
         sections = self.format_sections(sections)
 
+        # To tensor
+        obj_scores =  torch.tensor(obj_scores.values, dtype=torch.float32)
+        lat_neighbours =  torch.tensor(lat_neighbours, dtype=torch.float32)
+        sections = torch.tensor(sections, dtype=torch.float32)
+
         return {
-            "link_segment_id": seg_id,
-            "sample_distance": distance_along,
+            "numerical_id": idx,
             "image": img,
-            "object_predictions": obj_preds,
             "object_scores": obj_scores,
             "lat_neighbours": lat_neighbours,
             "sections": sections,
@@ -589,15 +592,15 @@ class LaneDetectionDataset(Dataset):
 
     def compute_statistics(self):
         obj_scores = []
-        section_pos = np.zeros((2, self.max_lanes + 1), dtype=int)
+        section_pos = torch.zeros((2, self.max_lanes + 1), dtype=torch.int32)
 
         for i in range(len(self)):
             sample = self[i]
-            sample_obj_scores = sample['object_scores'].T
+            sample_obj_scores = pd.DataFrame(sample['object_scores'].detach().cpu().numpy().T)
             if not sample_obj_scores.empty:
                 obj_scores.append(sample_obj_scores)
 
-            section_pos += sample['sections']
+            section_pos += sample['sections'].int()
 
         # ---- Object predictions ----
         obj_scores = pd.concat(obj_scores)
@@ -606,7 +609,7 @@ class LaneDetectionDataset(Dataset):
 
         # ---- Class balance ----
         section_neg = len(self) - section_pos
-        section_weights = (section_neg / section_pos.clip(min=1e-6)).clip(max=self.max_class_weight)
+        section_weights = (section_neg / section_pos.clamp(min=1e-6)).clamp(max=self.max_class_weight)
 
         return {
             'object_pred_means': obj_score_means,

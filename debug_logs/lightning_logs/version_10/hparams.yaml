@@ -1,0 +1,76 @@
+class_weights: !!python/object/apply:torch._utils._rebuild_tensor_v2
+- !!python/object/apply:torch.storage._load_from_bytes
+  - !!binary |
+    gAKKCmz8nEb5IGqoUBkugAJN6QMugAJ9cQAoWBAAAABwcm90b2NvbF92ZXJzaW9ucQFN6QNYDQAA
+    AGxpdHRsZV9lbmRpYW5xAohYCgAAAHR5cGVfc2l6ZXNxA31xBChYBQAAAHNob3J0cQVLAlgDAAAA
+    aW50cQZLBFgEAAAAbG9uZ3EHSwR1dS6AAihYBwAAAHN0b3JhZ2VxAGN0b3JjaApGbG9hdFN0b3Jh
+    Z2UKcQFYDwAAADEwNTU1MzE0NzcwMjgxNnECWAMAAABjcHVxA0sMTnRxBFEugAJdcQBYDwAAADEw
+    NTU1MzE0NzcwMjgxNnEBYS4MAAAAAAAAAFjuaUC0wmY/AACUQAAASEEAAMhCAADIQljuaUCivEY/
+    27atQAAAfkEAAMhCAADIQg==
+- 0
+- !!python/tuple
+  - 2
+  - 6
+- !!python/tuple
+  - 6
+  - 1
+- false
+- !!python/object/apply:collections.OrderedDict
+  - []
+dice_weight: 0.5
+freeze_resnet_blocks: true
+hidden_dim: 128
+image_feat_dim: 128
+lat_feat_dim: 32
+lat_vec_len: 70
+lr: 0.001
+max_lanes: 5
+obj_feat_dim: 64
+obj_mean: !!python/object/apply:numpy.core.multiarray._reconstruct
+  args:
+  - &id001 !!python/name:numpy.ndarray ''
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 15
+  - &id002 !!python/object/apply:numpy.dtype
+    args:
+    - f4
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - false
+  - !!binary |
+    f6wxPU5hsziOZPU6u9+KPJ4HIT7Y3Hg9aZ4LPi5UiT06roE96LY4Ouh5jzkZ7kQ8eXp6PNiBKz4A
+    AAAA
+obj_pred_shape: !!python/tuple
+- 15
+- 50
+obj_std: !!python/object/apply:numpy.core.multiarray._reconstruct
+  args:
+  - *id001
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 15
+  - *id002
+  - false
+  - !!binary |
+    yrqXPvhUSTtSkAA9MJ4jPlPQOj8G5BQ/1t2eP3h5ZT9v9Rc/V7p8PPZGJDxN+/E96NFTPmdYMT8A
+    AAAA
