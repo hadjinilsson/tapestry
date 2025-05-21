@@ -26,6 +26,8 @@ class LaneDetectionDataset(Dataset):
             infer_dist: float = 1.0,
             max_extra_image: float = 10.0,
             max_shift: float = 10.0,
+            max_lanes: int = 5,
+            max_class_weight: float = 100.0,
             num_obj_pred_classes: int = 15,
     ):
         # Arguments
@@ -38,6 +40,8 @@ class LaneDetectionDataset(Dataset):
         self.lon_coverage = lon_coverage
         self.max_extra_image = max_extra_image
         self.max_shift = max_shift
+        self.max_lanes = max_lanes
+        self.max_class_weight = max_class_weight
         self.num_obj_pred_classes = num_obj_pred_classes
 
         # Derived
@@ -124,10 +128,6 @@ class LaneDetectionDataset(Dataset):
         link_id = seg['link_id']
         sample_point = seg_geom.interpolate(distance_along)
 
-        # Placeholder tensors
-        heatmap_tensor = torch.zeros((1, 50))
-        neighbor_proj = torch.zeros((1, 50))
-
         # # Cross-sectional line to get lateral neighbours and section labels
         cross_section = self.get_cross_section(seg_geom, distance_along, sample_point)
 
@@ -145,63 +145,64 @@ class LaneDetectionDataset(Dataset):
         # Get slice data
         img, obj_preds = self.get_slice_data(lon_neighbours, distance_along, used_pre_len, used_pro_len)
 
-        # Image augmentations
+        # Augmentations
         if self.mode == "train":
+
+            #  Image
             brightness_factor = random.uniform(0.8, 1.2)
             contrast_factor = random.uniform(0.8, 1.2)
             img = TF.adjust_brightness(img, brightness_factor)
             img = TF.adjust_contrast(img, contrast_factor)
 
-        if self.mode == "train":
             noise = torch.randn_like(img) * 0.02
             img = torch.clamp(img + noise, 0.0, 1.0)
 
-        if self.mode == "train" and random.random() < 0.3:
             img = to_pil_image(img)
             img = T.GaussianBlur(kernel_size=3)(img)
             img = to_tensor(img)
 
-        # Lateral shift
-        if self.mode == "train" and self.max_shift > 0:
-            shift = random.uniform(-self.max_shift, self.max_shift)
+            # Lateral shift
+            if self.max_shift > 0:
+                shift = random.uniform(-self.max_shift, self.max_shift)
+            else:
+                shift = 0.0
+
+            # Sift image
+            img = self.shift_image(img, shift)
+            # Shift object predictions
+            obj_preds = self.shift_object_predictions(obj_preds, shift)
+            # Shift sections
+            sections = self.shift_points(sections, shift, self.dim_gsd/2)
+            # Sift lateral neighbours
+            lat_neighbours = self.shift_points(lat_neighbours, shift, self.lat_coverage)
+
+            # Vertical flip
+            flip = self.enable_flip and random.random() < 0.5
+            if flip:
+                img = torch.flip(img, dims=[1, 2])
+                obj_preds["y_center"] = self.dim_pixels - obj_preds["y_center"]
+                obj_preds["x_center"] = self.dim_pixels - obj_preds["x_center"]
+                sections['direction'] = sections.direction.map({'forward': 'backward', 'backward': 'forward'})
+                sections['x_offset'] *= -1
+                lat_neighbours['x_offset'] *= -1
+
         else:
-            shift = 0.0
-
-        # Sift image
-        img = self.shift_image(img, shift)
-        # Shift object predictions
-        obj_preds = self.shift_object_predictions(obj_preds, shift)
-        # Shift sections
-        sections = self.shift_points(sections, shift, self.dim_gsd/2)
-        # Sift lateral neighbours
-        lat_neighbours = self.shift_points(lat_neighbours, shift, self.lat_coverage)
-
-        # Vertical flip
-        flip = self.enable_flip and random.random() < 0.5
-        if flip:
-            img = torch.flip(img, dims=[1, 2])
-            obj_preds["y_center"] = self.dim_pixels - obj_preds["y_center"]
-            obj_preds["x_center"] = self.dim_pixels - obj_preds["x_center"]
-            sections['direction'] = sections.direction.map({'forward': 'backward', 'backward': 'forward'})
-            sections['x_offset'] *= -1
-            lat_neighbours['x_offset'] *= -1
+            shift = 0
+            flip = False
 
         # Format data
-        obj_preds = self.format_object_predictions(obj_preds)
+        obj_scores = self.format_object_predictions(obj_preds)
         lat_neighbours = self.format_lat_neighbours(lat_neighbours)
-        sections = sections.groupby('direction')['direction'].count().reindex(['forward', 'backward'], fill_value=0)
+        sections = self.format_sections(sections)
 
         return {
-            "image": img,
-            "heatmap": heatmap_tensor,
-            "neighbors": neighbor_proj,
-            "sections": sections,
             "link_segment_id": seg_id,
             "sample_distance": distance_along,
-            "lon_neighbours": lon_neighbours,
-            "lat_neighbours": lat_neighbours,
+            "image": img,
             "object_predictions": obj_preds,
-            "cross_section": cross_section,
+            "object_scores": obj_scores,
+            "lat_neighbours": lat_neighbours,
+            "sections": sections,
             "shift": shift,
             "flip": flip,
         }
@@ -537,20 +538,21 @@ class LaneDetectionDataset(Dataset):
     def format_object_predictions(self, obj_preds):
 
         # Normalize to projected space
-        obj_preds[['x_center', 'y_center', 'width', 'height']] /= (self.pixels_per_meter * self.dim_bins)
-        obj_preds['score'] = obj_preds['confidence'] * obj_preds['height']
-        obj_preds['score'] /= np.abs(obj_preds['y_center'] - self.lon_coverage)
-        obj_preds['x_start'] = obj_preds['x_center'] - obj_preds['width'] / 2
-        obj_preds['x_end'] = obj_preds['x_center'] + obj_preds['width'] / 2
+        obj_scores = obj_preds.copy()
+        obj_scores[['x_center', 'y_center', 'width', 'height']] /= (self.pixels_per_meter * self.dim_bins)
+        obj_scores['score'] = obj_scores['confidence'] * obj_scores['height']
+        obj_scores['score'] /= np.abs(obj_scores['y_center'] - self.lon_coverage).clip(lower=1.0)
+        obj_scores['x_start'] = obj_scores['x_center'] - obj_scores['width'] / 2
+        obj_scores['x_end'] = obj_scores['x_center'] + obj_scores['width'] / 2
 
         # Create slot edges
         slots = np.linspace(0, self.lat_coverage, num=self.num_bins + 1)
         slot_centers = (slots[:-1] + slots[1:]) / 2
 
         # Broadcast x_start and x_end to slots
-        x_start = obj_preds['x_start'].values[:, np.newaxis]
-        x_end = obj_preds['x_end'].values[:, np.newaxis]
-        score = obj_preds['score'].values[:, np.newaxis]
+        x_start = obj_scores['x_start'].values[:, np.newaxis]
+        x_end = obj_scores['x_end'].values[:, np.newaxis]
+        score = obj_scores['score'].values[:, np.newaxis]
 
         # Check which slots fall within each object bbox (N objects × 50 slots)
         mask = (slot_centers >= x_start) & (slot_centers <= x_end)
@@ -560,13 +562,13 @@ class LaneDetectionDataset(Dataset):
         slot_cols = []
         for i in range(self.num_bins):
             col_name = f"slot_{i}"
-            obj_preds[col_name] = slot_matrix[:, i]
+            obj_scores[col_name] = slot_matrix[:, i]
             slot_cols.append(col_name)
 
         #  Group by object class and expand
-        obj_preds = obj_preds.groupby('class')[slot_cols].sum().reindex(range(self.num_obj_pred_classes), fill_value=0)
+        obj_scores = obj_scores.groupby('class')[slot_cols].sum().reindex(range(self.num_obj_pred_classes), fill_value=0)
 
-        return obj_preds
+        return obj_scores
 
     def format_lat_neighbours(self, lat_neighbours):
         lat_neighbours['x_offset'] += self.lat_coverage
@@ -574,3 +576,41 @@ class LaneDetectionDataset(Dataset):
         lat_neighbours = np.zeros(round(self.lat_coverage * 2), dtype=int)
         lat_neighbours[lat_neighbour_pos] = 1
         return lat_neighbours
+
+    def format_sections(self, section_df):
+        section_mat = np.zeros((2, self.max_lanes + 1), dtype=int)
+        for dir_idx, direction in enumerate(['forward', 'backward']):
+            count = (section_df.direction == direction).sum()
+            if count < self.max_lanes:
+                section_mat[dir_idx, count] = 1
+            else:
+                section_mat[dir_idx, self.max_lanes] = 1
+        return section_mat
+
+    def compute_statistics(self):
+        obj_scores = []
+        section_pos = np.zeros((2, self.max_lanes + 1), dtype=int)
+
+        for i in range(len(self)):
+            sample = self[i]
+            sample_obj_scores = sample['object_scores'].T
+            if not sample_obj_scores.empty:
+                obj_scores.append(sample_obj_scores)
+
+            section_pos += sample['sections']
+
+        # ---- Object predictions ----
+        obj_scores = pd.concat(obj_scores)
+        obj_score_means = obj_scores.mean(axis=0)
+        obj_score_stds = obj_scores.std(axis=0)
+
+        # ---- Class balance ----
+        section_neg = len(self) - section_pos
+        section_weights = (section_neg / section_pos.clip(min=1e-6)).clip(max=self.max_class_weight)
+
+        return {
+            'object_pred_means': obj_score_means,
+            'obj_score_stds': obj_score_stds,
+            'lane_weights': section_weights,
+        }
+
