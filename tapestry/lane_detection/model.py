@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 import pytorch_lightning as pl
+from torchvision.models import ResNet18_Weights
 from torchmetrics import Accuracy, Recall, F1Score
 
 
@@ -41,9 +42,9 @@ class LaneDetectionModel(pl.LightningModule):
 
         self.register_buffer("obj_mean", torch.tensor(obj_mean) if obj_mean is not None else torch.zeros(obj_pred_shape))
         self.register_buffer("obj_std", torch.tensor(obj_std) if obj_std is not None else torch.ones(obj_pred_shape))
-        self.register_buffer("class_weights", torch.tensor(class_weights) if class_weights is not None else torch.ones((2, self.num_lane_classes)))
+        self.register_buffer("class_weights", class_weights if class_weights is not None else torch.ones((2, self.num_lane_classes)))
 
-        resnet = models.resnet18(pretrained=True)
+        resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
         if freeze_resnet_blocks:
             for name, param in resnet.named_parameters():
                 if "layer1" in name or "layer2" in name:

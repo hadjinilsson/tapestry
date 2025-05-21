@@ -64,7 +64,7 @@ trainer = Trainer(
     logger=tb_logger,
     max_epochs=max_epochs,
     callbacks=[checkpoint_cb, early_stop_cb],
-    accelerator="auto",
+    accelerator="gpu",
     devices=1 if torch.cuda.is_available() else None,
     log_every_n_steps=10
 )
