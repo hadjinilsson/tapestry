@@ -11,3 +11,4 @@ geopandas
 SQLAlchemy
 pillow
 pytorch-lightning
+tensorboard
