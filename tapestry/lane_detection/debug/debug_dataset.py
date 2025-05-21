@@ -1,8 +1,30 @@
 from pathlib import Path
 from tapestry.lane_detection.dataset import LaneDetectionDataset
+import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
+
+
+def validate_shapes(dataset, max_samples=1000):
+    from collections import defaultdict
+
+    shape_tracker = defaultdict(set)
+
+    for i in range(min(len(dataset), max_samples)):
+        sample = dataset[i]
+
+        for key, value in sample.items():
+            if not isinstance(value, torch.Tensor):
+                continue
+            shape_tracker[key].add(tuple(value.shape))
+
+    for key, shapes in shape_tracker.items():
+        print(f"{key}: {len(shapes)} unique shapes")
+        for shape in shapes:
+            print(f"  - {shape}")
+
+    print("\n✅ Done. If any tensor has more than one unique shape, it's a batching risk.")
 
 
 def show_sample_with_predictions(sample):
@@ -29,17 +51,15 @@ def show_sample_with_predictions(sample):
     plt.show()
 
 train_ds = LaneDetectionDataset(data_root=Path('data'), mode="train")
-inf_ds = LaneDetectionDataset(data_root=Path('data'), mode="inference")
+# inf_ds = LaneDetectionDataset(data_root=Path('data'), mode="inference")
 
-stats = train_ds.compute_statistics()
+validate_shapes(train_ds)
 
-# sample = train_ds[58]
-sample = train_ds[np.random.randint(len(train_ds))]
+# stats = train_ds.compute_statistics()
 
-show_sample_with_predictions(sample)
+# sample = train_ds[5]
+# sample = train_ds[np.random.randint(len(train_ds))]
+# show_sample_with_predictions(sample)
 
-sample = inf_ds[np.random.randint(len(inf_ds))]
-
-show_sample_with_predictions(sample)
-
-sample
+# sample = inf_ds[np.random.randint(len(inf_ds))]
+# show_sample_with_predictions(sample)

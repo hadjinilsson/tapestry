@@ -191,6 +191,7 @@ class LaneDetectionDataset(Dataset):
             flip = False
 
         # Format data
+        img = TF.resize(img, size=[self.dim_pixels, self.dim_pixels])
         obj_scores = self.format_object_predictions(obj_preds)
         lat_neighbours = self.format_lat_neighbours(lat_neighbours)
         sections = self.format_sections(sections)
@@ -382,7 +383,7 @@ class LaneDetectionDataset(Dataset):
             pad_above_m = 0
             pad_below_m = 0
 
-            if is_first and is_first_uv:
+            if (is_first and is_first_uv) or (is_first and (used_preceding_length < self.lon_coverage)):
                 extra_needed_m = self.lon_coverage - used_preceding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
                 if is_current:
@@ -397,7 +398,7 @@ class LaneDetectionDataset(Dataset):
             else:
                 slice_start_m = seg_start_m
 
-            if is_last and is_last_uv:
+            if (is_last and is_last_uv) or (is_last and (used_proceeding_length < self.lon_coverage)):
                 extra_needed_m = self.lon_coverage - used_proceeding_length
                 extra_img_m = min(extra_needed_m, self.max_extra_image)
                 if is_current:
@@ -423,6 +424,9 @@ class LaneDetectionDataset(Dataset):
             slice_anchor_m += pad_above_m
 
         img_tensor = torch.cat(img_slices, dim=1)
+
+        if (img_tensor.shape[1] < 250) or (img_tensor.shape[1] > 260):
+            print('pause')
 
         if obj_preds_slices:
             obj_preds = pd.concat(obj_preds_slices, ignore_index=True)
@@ -575,7 +579,7 @@ class LaneDetectionDataset(Dataset):
 
     def format_lat_neighbours(self, lat_neighbours):
         lat_neighbours['x_offset'] += self.lat_coverage
-        lat_neighbour_pos = lat_neighbours.x_offset.round().astype(int).unique()
+        lat_neighbour_pos = lat_neighbours.x_offset.round().astype(int).clip(0, (self.lat_coverage*2) - 1).unique()
         lat_neighbours = np.zeros(round(self.lat_coverage * 2), dtype=int)
         lat_neighbours[lat_neighbour_pos] = 1
         return lat_neighbours
