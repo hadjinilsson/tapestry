@@ -82,9 +82,9 @@ class LaneDetectionModel(pl.LightningModule):
             nn.Linear(hidden_dim, 2 * self.num_lane_classes)
         )
 
-        self.val_accuracy = Accuracy(task="multiclass", num_classes=self.num_lane_classes, average='macro')
-        self.val_recall = Recall(task="multiclass", num_classes=self.num_lane_classes, average='macro')
-        self.val_f1 = F1Score(task="multiclass", num_classes=self.num_lane_classes, average='macro')
+        self.val_accuracy = Accuracy(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_recall = Recall(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_f1 = F1Score(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
 
     def forward(self, image, object_scores, lat_neighbours):
         object_scores = (object_scores - self.obj_mean[:, None]) / self.obj_std[:, None]
