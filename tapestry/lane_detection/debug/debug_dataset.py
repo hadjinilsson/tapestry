@@ -53,9 +53,9 @@ def show_sample_with_predictions(sample):
 train_ds = LaneDetectionDataset(data_root=Path('data'), mode="train")
 # inf_ds = LaneDetectionDataset(data_root=Path('data'), mode="inference")
 
-validate_shapes(train_ds)
+# validate_shapes(train_ds)
 
-# stats = train_ds.compute_statistics()
+stats = train_ds.compute_statistics()
 
 # sample = train_ds[5]
 # sample = train_ds[np.random.randint(len(train_ds))]
