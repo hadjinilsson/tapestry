@@ -141,7 +141,7 @@ def main(
         'is_training'
     ] = False
 
-    projected_links = []
+    projected_segs = []
     projected_sections = []
 
     for base_network_id, epsg in crs_lookup.items():
@@ -154,8 +154,11 @@ def main(
             gdf_ls_proj = gdf_ls.to_crs(epsg=epsg)
             gdf_ls_proj["geom_proj"] = gdf_ls_proj.geometry
             gdf_ls_proj["length_proj"] = gdf_ls_proj.geometry.length
-            gdf_ls_proj = gdf_ls_proj.drop(columns=["geom"])
-            projected_links.append(gdf_ls_proj)
+            df_ls_proj = {}
+            for col in gdf_ls_proj.drop(columns='geom').columns:
+                df_ls_proj[col] = list(gdf_ls_proj[col])
+            df_ls_proj = pd.DataFrame(df_ls_proj)
+            projected_segs.append(df_ls_proj)
 
         # --- Sections ---
         s_subset = sections[sections["base_network_id"] == base_network_id].copy()
@@ -164,18 +167,23 @@ def main(
             gdf_sec_proj = gdf_sec.to_crs(epsg=epsg)
             gdf_sec_proj["geom_proj"] = gdf_sec_proj.geometry
             gdf_sec_proj["length_proj"] = gdf_sec_proj.geometry.length
-            gdf_sec_proj = gdf_sec_proj.drop(columns=["geom"])
-            projected_sections.append(gdf_sec_proj)
+            df_sec_proj = {}
+            for col in gdf_sec_proj.drop(columns='geom').columns:
+                df_sec_proj[col] = list(gdf_sec_proj[col])
+            df_sec_proj = pd.DataFrame(df_sec_proj)
+            projected_sections.append(df_sec_proj)
 
-    if projected_links:
-        df_links_proj = pd.concat(projected_links, ignore_index=True)
-        df_links_proj["bearing"] = df_links_proj["geom_proj"].apply(compute_bearing)
-        df_links_proj.to_parquet(GEOMETRY_DIR / "link_segments_projected.parquet")
-        print(f"✅ Saved projected link segments ({len(df_links_proj)} rows)")
+    if projected_segs:
+        df_segs_proj = pd.concat(projected_segs, ignore_index=True)
+        df_segs_proj["bearing"] = df_segs_proj["geom_proj"].apply(compute_bearing)
+        df_segs_proj["geom_proj"] = df_segs_proj["geom_proj"].apply(lambda g: g.wkb)
+        df_segs_proj.to_parquet(GEOMETRY_DIR / "link_segments_projected.parquet")
+        print(f"✅ Saved projected link segments ({len(df_segs_proj)} rows)")
 
     if projected_sections:
         df_sections_proj = pd.concat(projected_sections, ignore_index=True)
         df_sections_proj["bearing"] = df_sections_proj["geom_proj"].apply(compute_bearing)
+        df_sections_proj["geom_proj"] = df_sections_proj["geom_proj"].apply(lambda g: g.wkb)
         df_sections_proj.to_parquet(GEOMETRY_DIR / "sections_projected.parquet")
         print(f"✅ Saved projected sections ({len(df_sections_proj)} rows)")
 

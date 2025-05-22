@@ -34,6 +34,18 @@ def get_camera_point_offset(link_segments, crs_lookup):
             -subset['dist_camera_ls_start'] - (subset['geom_proj'].length / 2)
         )
 
+        subset = gpd.GeoDataFrame(
+            subset.drop(columns=[
+                'camera_geom',
+                'geom_proj',
+                'camera_geom_proj',
+                'dist_camera_ls_start',
+                'dist_camera_ls_end',
+            ], errors="ignore"),
+            geometry='geom',
+            crs=link_segments.crs
+        )
+
         link_segments_with_offsets.append(subset)
 
     # Combine results and clean up
@@ -41,12 +53,6 @@ def get_camera_point_offset(link_segments, crs_lookup):
         pd.concat(link_segments_with_offsets),
         geometry='geom',
         crs=link_segments.crs
-    ).drop(columns=[
-        'camera_geom',
-        'geom_proj',
-        'camera_geom_proj',
-        'dist_camera_ls_start',
-        'dist_camera_ls_end',
-    ], errors="ignore")
+    )
 
     return link_segments_with_offsets
