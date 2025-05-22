@@ -28,7 +28,7 @@ class LaneDetectionDataset(Dataset):
             max_shift: float = 10.0,
             max_lanes: int = 5,
             max_class_weight: float = 100.0,
-            num_obj_pred_classes: int = 15,
+            num_obj_pred_classes: int = 100,
     ):
         # Arguments
         self.data_root = Path(data_root)
