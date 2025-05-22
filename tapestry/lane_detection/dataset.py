@@ -127,10 +127,6 @@ class LaneDetectionDataset(Dataset):
         seg_len = seg['length_proj']
         link_id = seg['link_id']
 
-        if not isinstance(seg_geom, LineString):
-            print(f"Link segment {seg_id} is not a LineString, it is a {type(seg_geom)}")
-            print(seg_geom)
-
         sample_point = seg_geom.interpolate(distance_along)
 
         # # Cross-sectional line to get lateral neighbours and section labels
@@ -601,15 +597,12 @@ class LaneDetectionDataset(Dataset):
         section_pos = torch.zeros((2, self.max_lanes + 1), dtype=torch.int32)
 
         for i in range(len(self)):
-            try:
-                sample = self[i]
-                sample_obj_scores = pd.DataFrame(sample['object_scores'].detach().cpu().numpy().T)
-                if not sample_obj_scores.empty:
-                    obj_scores.append(sample_obj_scores)
+            sample = self[i]
+            sample_obj_scores = pd.DataFrame(sample['object_scores'].detach().cpu().numpy().T)
+            if not sample_obj_scores.empty:
+                obj_scores.append(sample_obj_scores)
 
-                section_pos += sample['sections'].int()
-            except:
-                print(f'Something is wrong for sample {i}')
+            section_pos += sample['sections'].int()
 
         # ---- Object predictions ----
         obj_scores = pd.concat(obj_scores)

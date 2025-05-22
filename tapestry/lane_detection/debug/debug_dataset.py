@@ -63,3 +63,5 @@ stats = train_ds.compute_statistics()
 
 # sample = inf_ds[np.random.randint(len(inf_ds))]
 # show_sample_with_predictions(sample)
+
+print('done')

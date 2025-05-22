@@ -104,7 +104,7 @@ def get_link_segments_near_annotation_areas(
             FROM topologyannotator_annotationarea aa
             {area_filter}
         )
-        SELECT
+        SELECT DISTINCT
             {columns}
         FROM basenetwork_linksegment ls
         JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
