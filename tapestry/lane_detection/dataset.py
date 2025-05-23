@@ -28,7 +28,7 @@ class LaneDetectionDataset(Dataset):
             max_shift: float = 10.0,
             max_lanes: int = 5,
             max_class_weight: float = 100.0,
-            num_obj_pred_classes: int = 100,
+            num_obj_pred_classes: int = 80,
     ):
         # Arguments
         self.data_root = Path(data_root)
@@ -201,6 +201,10 @@ class LaneDetectionDataset(Dataset):
         obj_scores =  torch.tensor(obj_scores.values, dtype=torch.float32)
         lat_neighbours =  torch.tensor(lat_neighbours, dtype=torch.float32)
         sections = torch.tensor(sections, dtype=torch.float32)
+
+        #  Check for nans
+        for tns in [img, obj_scores, lat_neighbours, sections]:
+            assert not torch.isnan(tns).any(), "NaN detected in input"
 
         return {
             "numerical_id": idx,
@@ -607,7 +611,7 @@ class LaneDetectionDataset(Dataset):
         # ---- Object predictions ----
         obj_scores = pd.concat(obj_scores)
         obj_score_means = obj_scores.mean(axis=0)
-        obj_score_stds = obj_scores.std(axis=0)
+        obj_score_stds = obj_scores.std(axis=0).clip(min=1e-6)
 
         # ---- Class balance ----
         section_neg = len(self) - section_pos
