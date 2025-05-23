@@ -41,8 +41,8 @@ class LaneDetectionModel(pl.LightningModule):
         self.num_lane_classes = max_lanes + 1
         self.dice_weight = dice_weight
 
-        self.register_buffer("obj_mean", torch.tensor(obj_mean) if obj_mean is not None else torch.zeros(obj_pred_shape))
-        self.register_buffer("obj_std", torch.tensor(obj_std) if obj_std is not None else torch.ones(obj_pred_shape))
+        self.register_buffer("obj_mean", torch.tensor(obj_mean, dtype=torch.float32) if obj_mean is not None else torch.zeros(obj_pred_shape))
+        self.register_buffer("obj_std", torch.tensor(obj_std, dtype=torch.float32) if obj_std is not None else torch.ones(obj_pred_shape))
         self.register_buffer("class_weights", class_weights if class_weights is not None else torch.ones((2, self.num_lane_classes)))
 
         resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
