@@ -38,6 +38,8 @@ def train(
     train_size = len(full_dataset) - val_size
     train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
 
+    print('I got here')
+
     # ---- Compute statistics ----
     stats = full_dataset.compute_statistics()
 
