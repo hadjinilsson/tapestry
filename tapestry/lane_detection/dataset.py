@@ -611,7 +611,7 @@ class LaneDetectionDataset(Dataset):
         # ---- Object predictions ----
         obj_scores = pd.concat(obj_scores)
         obj_score_means = obj_scores.mean(axis=0)
-        obj_score_stds = obj_scores.std(axis=0).clip(min=1e-6)
+        obj_score_stds = obj_scores.std(axis=0).clip(lower=1e-6)
 
         # ---- Class balance ----
         section_neg = len(self) - section_pos
