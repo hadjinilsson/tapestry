@@ -29,6 +29,8 @@ def train(
         max_epochs: int = 50,
     ):
 
+    print("I'm in train()")
+
     torch.manual_seed(seed)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -37,8 +39,6 @@ def train(
     val_size = int(len(full_dataset) * val_split)
     train_size = len(full_dataset) - val_size
     train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
-
-    print('I got here')
 
     # ---- Compute statistics ----
     stats = full_dataset.compute_statistics()
@@ -103,6 +103,8 @@ def main():
     parser.add_argument("--no-upload", action="store_true", help="Disable uploading run to S3")
     parser.add_argument("--s3-prefix", default="lane_detection")
     args = parser.parse_args()
+
+    print("I'm in main()")
 
     run_id, run_dir = train(
         args.batch_size,
