@@ -32,6 +32,7 @@ class LaneDetectionModel(pl.LightningModule):
         lr=1e-3,
         dice_weight=0.5,
         freeze_resnet_blocks=True,
+        run_id = None,
     ):
         super().__init__()
         self.save_hyperparameters()

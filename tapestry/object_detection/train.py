@@ -32,14 +32,14 @@ def main():
     parser.add_argument("--model", default="yolov8s.pt", help="YOLOv8 model type")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--upload", action="store_true", help="Upload run to S3")
+    parser.add_argument("--no-upload", action="store_true", help="Upload run to S3")
     parser.add_argument("--s3-prefix", default="object_detection")
     args = parser.parse_args()
 
     run_id, run_dir = train(args.model, args.epochs, args.imgsz, DEFAULT_OUTPUT_DIR)
     print(f"🚀 Training complete: Run ID = {run_id}")
 
-    if args.upload:
+    if not args.no_upload:
         print("☁️ Uploading run to S3...")
         upload_dir_to_s3(Path(run_dir), f"{args.s3_prefix}/{run_id}", S3_BUCKET)
 
