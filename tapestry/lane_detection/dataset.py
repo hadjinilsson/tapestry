@@ -113,7 +113,7 @@ class LaneDetectionDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, fast=False):
         if self.mode == "inference":
             seg_id, distance_along = self.samples[idx]
             seg = self.link_segments.loc[seg_id]
@@ -136,7 +136,7 @@ class LaneDetectionDataset(Dataset):
         sections = self.get_sections(seg_id, sample_point, cross_section)
 
         # Get neighbours
-        lat_neighbours = self.get_lat_neighbours(seg_id, sample_point, cross_section)
+        lat_neighbours = self.get_lat_neighbours(seg_id, sample_point, cross_section) if not fast else None
         lon_neighbours = self.get_lon_neighbours(seg_id, distance_along)
         self.check_lon_continuity(link_id, lon_neighbours)
 
@@ -144,10 +144,10 @@ class LaneDetectionDataset(Dataset):
         used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, distance_along, seg_len)
 
         # Get slice data
-        img, obj_preds = self.get_slice_data(lon_neighbours, distance_along, used_pre_len, used_pro_len)
+        img, obj_preds = self.get_slice_data(lon_neighbours, distance_along, used_pre_len, used_pro_len, fast)
 
         # Augmentations
-        if self.mode == "train":
+        if self.mode == "train" and not fast:
 
             #  Image
             brightness_factor = random.uniform(0.8, 1.2)
@@ -192,18 +192,19 @@ class LaneDetectionDataset(Dataset):
             flip = False
 
         # Format data
-        img = TF.resize(img, size=[self.dim_pixels, self.dim_pixels])
+        img = TF.resize(img, size=[self.dim_pixels, self.dim_pixels]) if not fast else None
         obj_scores = self.format_object_predictions(obj_preds)
-        lat_neighbours = self.format_lat_neighbours(lat_neighbours)
+        lat_neighbours = self.format_lat_neighbours(lat_neighbours) if not fast else None
         sections = self.format_sections(sections)
 
         # To tensor
         obj_scores =  torch.tensor(obj_scores.values, dtype=torch.float32)
-        lat_neighbours =  torch.tensor(lat_neighbours, dtype=torch.float32)
+        lat_neighbours =  torch.tensor(lat_neighbours, dtype=torch.float32) if not fast else None
         sections = torch.tensor(sections, dtype=torch.float32)
 
         #  Check for nans
-        for tns in [img, obj_scores, lat_neighbours, sections]:
+        to_check = [obj_scores, sections] if fast else [img, obj_scores, lat_neighbours, sections]
+        for tns in to_check:
             assert not torch.isnan(tns).any(), "NaN detected in input"
 
         return {
@@ -357,6 +358,7 @@ class LaneDetectionDataset(Dataset):
             distance_along: float,
             used_preceding_length: float,
             used_proceeding_length: float,
+            fast: False,
     ):
 
         img_slices = []
@@ -420,15 +422,16 @@ class LaneDetectionDataset(Dataset):
             else:
                 slice_end_m = seg_end_m
 
-            seg_img_slices = self.get_image_slices(seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m)
-            img_slices = seg_img_slices + img_slices
+            if not fast:
+                seg_img_slices = self.get_image_slices(seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m)
+                img_slices = seg_img_slices + img_slices
 
             slice_anchor_m += pad_below_m + slice_end_m - slice_start_m
             obj_preds_slice = self.get_obj_preds_slice(seg_id, slice_start_m, slice_end_m, slice_anchor_m)
             obj_preds_slices.append(obj_preds_slice)
             slice_anchor_m += pad_above_m
 
-        img_tensor = torch.cat(img_slices, dim=1)
+        img_tensor = torch.cat(img_slices, dim=1) if not fast else None
 
         if obj_preds_slices:
             obj_preds = pd.concat(obj_preds_slices, ignore_index=True)
@@ -601,7 +604,7 @@ class LaneDetectionDataset(Dataset):
         section_pos = torch.zeros((2, self.max_lanes + 1), dtype=torch.int32)
 
         for i in range(len(self)):
-            sample = self[i]
+            sample = self.__getitem__(i, fast=True)
             sample_obj_scores = pd.DataFrame(sample['object_scores'].detach().cpu().numpy().T)
             if not sample_obj_scores.empty:
                 obj_scores.append(sample_obj_scores)
