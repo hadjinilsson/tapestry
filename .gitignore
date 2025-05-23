@@ -39,3 +39,6 @@ data/
 .vscode/
 *.swp
 *.bak
+
+# Torch
+debug_logs/
