@@ -29,8 +29,6 @@ def train(
         max_epochs: int = 50,
     ):
 
-    print("I'm in train()")
-
     torch.manual_seed(seed)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -104,8 +102,6 @@ def main():
     parser.add_argument("--s3-prefix", default="lane_detection")
     args = parser.parse_args()
 
-    print("I'm in main()")
-
     run_id, run_dir = train(
         args.batch_size,
         args.num_workers,
@@ -119,3 +115,6 @@ def main():
         print("☁️ Uploading run to S3...")
         upload_dir_to_s3(Path(run_dir), f"{args.s3_prefix}/{run_id}", S3_BUCKET)
 
+
+if __name__ == "__main__":
+    main()
