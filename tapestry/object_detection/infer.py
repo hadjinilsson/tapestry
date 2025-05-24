@@ -5,7 +5,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from ultralytics import YOLO
 from tapestry.utils.image_fetching import download_image
-from tapestry.utils.db import get_camera_point_ids_for_base_network, get_camera_point_ids_for_annotated_link_segments
+from tapestry.utils import db
 from tapestry.utils.s3 import download_dir_from_s3, upload_file_to_s3
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -52,10 +52,7 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
         image_paths = [TEMP_BATCH_DIR / f"{cp_id}.png" for cp_id in batch if (TEMP_BATCH_DIR / f"{cp_id}.png").exists()]
 
         try:
-
-            # Run inference
             results = model.predict(image_paths, save=False, verbose=False)
-
             for cp_id, result in zip(batch, results):
                 img_w, img_h = result.orig_shape[1], result.orig_shape[0]
                 for box in result.boxes:
@@ -74,10 +71,7 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
                         "width": width_norm,
                         "height": height_norm,
                     })
-
         finally:
-
-            # Clean up
             for img_path in TEMP_BATCH_DIR.glob("*.png"):
                 img_path.unlink(missing_ok=True)
 
@@ -93,11 +87,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
     filter_type = parser.add_mutually_exclusive_group(required=True)
-    filter_type.add_argument("--base-network", nargs="+", type=str, help ="Filter data by one or multiple base networks")
-    filter_type.add_argument("--camera-point-list", help="Path to .txt file with one camera_point_id per line")
-    filter_type.add_argument("--use-annotated-link-segments", action="store_true")
+    filter_type.add_argument("--base-networks", nargs="+", type=str)
+    filter_type.add_argument("--annotation-areas", nargs="+", type=str)
+    filter_type.add_argument("--annotated-link-segments", action="store_true")
+    filter_type.add_argument("--annotated-nodes", action="store_true")
+    filter_type.add_argument("--all", action="store_true")
     parser.add_argument("--batch-size", type=int, default=250)
-    parser.add_argument("--no-upload", action="store_true", help="Disable S3 upload")
+    parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--s3-prefix", default="object_detection")
     args = parser.parse_args()
 
@@ -110,15 +106,19 @@ def main():
             bucket=S3_BUCKET_MODELS,
         )
 
-    if args.use_annotated_link_segments:
-        camera_ids = get_camera_point_ids_for_annotated_link_segments()
-    elif args.camera_point_list:
-        with open(args.camera_point_list) as f:
-            camera_ids = [line.strip() for line in f if line.strip()]
+    if args.annotated_link_segments:
+        df = db.get_annotated_link_segments(exclude_geom=True)
+    elif args.annotated_nodes:
+        df = db.get_link_segments_for_annotated_nodes(exclude_geom=True)
+    elif args.annotation_areas:
+        df = db.get_link_segments_in_annotation_areas(area_names=args.annotation_areas, exclude_geom=True)
+    elif args.base_networks:
+        df = db.get_link_segments_by_base_network(args.base_networks, exclude_geom=True)
     else:
-        camera_ids = get_camera_point_ids_for_base_network(args.base_network)
+        df = db.get_all_link_segments(exclude_geom=True)
 
-    # Group camera points by base network prefix
+    camera_ids = df["camera_point_id"].dropna().unique().tolist()
+
     grouped = defaultdict(list)
     for cp_id in camera_ids:
         base = cp_id.split("_")[0]

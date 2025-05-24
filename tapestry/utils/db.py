@@ -10,144 +10,305 @@ load_dotenv()
 
 DB_URL = os.getenv("TOPANIMEX_DB_URL")
 
+# ───── COLUMN SETS ─────
 
-def get_base_network_crs() -> dict[str, int]:
-    """
-    Fetch mapping of base_network_id → EPSG CRS code.
+NODE_COLUMNS = [
+    "node_id",
+    "base_network_id",
+    "n_links",
+    "camera_point_id",
+    "annotated",
+    "annotator",
+    "annotation_date",
+    "n_locks",
+]
 
-    Returns:
-        Dict[str, int]: e.g., {"dalby25": 3006, "cph25": 25832, ...}
-    """
+LINK_SEGMENT_COLUMNS = [
+    "link_segment_id",
+    "link_id",
+    "segment_ix_uv",
+    "segment_ix_vu",
+    "camera_point_id",
+    "annotated",
+    "annotator",
+    "annotation_date",
+    "n_locks",
+]
+
+SECTION_COLUMNS = [
+    "id",
+    "link_segment_id",
+    "component"
+]
+TURN_COLUMNS = [
+    "id",
+    "node_id",
+    "component"
+]
+
+# ───── BASE NETWORKS ─────
+
+def get_base_networks() -> pd.DataFrame:
     query = """
-        SELECT base_network_id, crs
+        SELECT *
         FROM basenetwork_basenetwork;
     """
+    return pd.read_sql(query, con=DB_URL)
 
-    with psycopg2.connect(DB_URL, cursor_factory=RealDictCursor) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query)
-            rows = cur.fetchall()
-            return {row["base_network_id"]: row["crs"] for row in rows}
+# ───── NODES ─────
 
+def get_nodes_by_base_network(
+        base_network_ids: list[str],
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
 
-def get_camera_point_ids_for_base_network(base_network_id: str) -> list[str]:
-    query = """
-        SELECT camera_point_id
-        FROM basenetwork_camerapoint
-        WHERE base_network_id = %s
-          AND extracted = 'Y'
-        ORDER BY camera_point_id;
-    """
-
-    with psycopg2.connect(DB_URL, cursor_factory=RealDictCursor) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, (base_network_id,))
-            rows = cur.fetchall()
-            return [row["camera_point_id"] for row in rows]
-
-
-def get_camera_point_ids_for_annotated_link_segments() -> list[str]:
-    query = """
-        SELECT DISTINCT camera_point_id
-        FROM basenetwork_linksegment
-        WHERE annotated = 'Y'
-          AND camera_point_id IS NOT NULL
-    """
-
-    with psycopg2.connect(DB_URL, cursor_factory=RealDictCursor) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query)
-            rows = cur.fetchall()
-            return [row["camera_point_id"] for row in rows]
-
-
-def get_link_segments_near_annotation_areas(
-    buffer_meters: float = 25.0,
-    annotation_area_names: list[str] | None = None,
-    get_camera_point_geoms: bool = True,
-) -> gpd.GeoDataFrame:
-    """
-    Returns all LinkSegments that intersect buffered AnnotationAreas,
-    and whose camera point has been extracted.
-
-    Args:
-        buffer_meters: Buffer distance in meters (applied to AnnotationArea geom_3857).
-        annotation_area_names: List of AnnotationArea IDs, or None for all.
-        get_camera_point_geoms: Optional flag to get camera point geometries.
-
-    Returns:
-        GeoDataFrame of link segments intersecting buffered annotation areas.
-    """
-    if annotation_area_names:
-        name_list = ",".join(f"'{i}'" for i in annotation_area_names)
-        area_filter = f"WHERE aa.name IN ({name_list})"
+    placeholders = ",".join("%s" for _ in base_network_ids)
+    if ids_only:
+        columns = "node_id"
+    elif exclude_geom:
+        columns = ", ".join(NODE_COLUMNS)
     else:
-        area_filter = ""  # Use all areas
-
-    columns = """
-        ls.link_segment_id,
-        cp.base_network_id::text,
-        ls.link_id,
-        ls.segment_ix_uv,
-        ls.segment_ix_vu,
-        ls.annotated,
-        ls.camera_point_id,
-        ls.geom_3857 AS geom
-    """
-
-    if get_camera_point_geoms:
-        columns += ", ST_Transform(cp.geom, 3857) as camera_geom"
+        columns = "*"
 
     query = f"""
-        WITH selected_areas AS (
-            SELECT id, ST_Buffer(ST_Transform(geom, 3857), {buffer_meters}) AS geom_3857
+        SELECT {columns}
+        FROM basenetwork_node
+        WHERE base_network_id IN ({placeholders});
+    """
+
+    params = tuple(base_network_ids)
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL, params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+
+
+def get_nodes_in_annotation_areas(
+        buffer_meters: float = 50.0,
+        area_names: list[str] | None = None,
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    name_filter = ""
+    if area_names:
+        placeholders = ",".join("%s" for _ in area_names)
+        name_filter = f"WHERE aa.name IN ({placeholders})"
+
+    if ids_only:
+        columns = "n.node_id"
+    elif exclude_geom:
+        columns = ", ".join([f"n.{col}" for col in NODE_COLUMNS])
+    else:
+        columns = "n.*"
+
+    query = f"""
+        WITH buffered_areas AS (
+            SELECT id, ST_Buffer(ST_Transform(geom, 3857), %s) AS geom_3857
             FROM topologyannotator_annotationarea aa
-            {area_filter}
+            {name_filter}
         )
-        SELECT DISTINCT
-            {columns}
+        SELECT {columns}
+        FROM basenetwork_node n
+        JOIN buffered_areas b ON ST_Intersects(ST_Transform(n.geom, 3857), b.geom_3857);
+    """
+    params = (buffer_meters,) + tuple(area_names or [])
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL, params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+
+
+def get_annotated_nodes(
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if ids_only:
+        columns = "node_id"
+    elif exclude_geom:
+        columns = ", ".join(NODE_COLUMNS)
+    else:
+        columns = "*"
+
+    query = f"""
+        SELECT {columns}
+        FROM basenetwork_node
+        WHERE annotated = 'Y';
+    """
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
+
+# ───── LINK SEGMENTS ─────
+
+def get_link_segments_by_base_network(
+        base_network_ids: list[str],
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    placeholders = ",".join("%s" for _ in base_network_ids)
+    if ids_only:
+        columns = "ls.link_segment_id"
+    elif exclude_geom:
+        columns = ", ".join([f"ls.{col}" for col in LINK_SEGMENT_COLUMNS])
+    else:
+        columns = "ls.*"
+
+    query = f"""
+        SELECT {columns}
         FROM basenetwork_linksegment ls
         JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
-        JOIN selected_areas aa ON ST_Intersects(ls.geom_3857, aa.geom_3857)
-        WHERE cp.extracted = 'Y';
+        WHERE cp.base_network_id IN ({placeholders});
     """
 
-    df = pd.read_sql(query, con=DB_URL)
-    df["geom"] = df["geom"].apply(wkb.loads)
-    gdf = gpd.GeoDataFrame(df, geometry="geom", crs="EPSG:3857")
-
-    if get_camera_point_geoms:
-        gdf["camera_geom"] = gdf["camera_geom"].apply(wkb.loads)
-        gdf["camera_geom"] = gpd.GeoSeries(gdf["camera_geom"], crs="EPSG:3857")
-
-    return gdf
+    params = tuple(base_network_ids)
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL, params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
 
 
-def get_sections_by_link_segment_ids(link_segment_ids: list[str]) -> gpd.GeoDataFrame:
+def get_link_segments_in_annotation_areas(
+        buffer_meters: float = 25.0,
+        area_names: list[str] | None = None,
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    name_filter = ""
+    if area_names:
+        placeholders = ",".join("%s" for _ in area_names)
+        name_filter = f"WHERE aa.name IN ({placeholders})"
+
+    if ids_only:
+        columns = "ls.link_segment_id"
+    elif exclude_geom:
+        columns = ", ".join([f"ls.{col}" for col in LINK_SEGMENT_COLUMNS])
+    else:
+        columns = "ls.*"
+
+    query = f"""
+        WITH buffered_areas AS (
+            SELECT id, ST_Buffer(ST_Transform(geom, 3857), %s) AS geom_3857
+            FROM topologyannotator_annotationarea aa
+            {name_filter}
+        )
+        SELECT {columns}
+        FROM basenetwork_linksegment ls
+        WHERE ST_Intersects(ls.geom_3857, (SELECT ST_Union(geom_3857) FROM buffered_areas));
     """
-    Fetches all Sections tied to the given link_segment_ids, including base_network_id.
+    params = (buffer_meters,) + tuple(area_names or [])
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL, params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
 
-    Args:
-        link_segment_ids: List of link_segment_id strings.
 
-    Returns:
-        GeoDataFrame of sections, with base_network_id column.
+def get_annotated_link_segments(
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if ids_only:
+        columns = "link_segment_id"
+    elif exclude_geom:
+        columns = ", ".join(LINK_SEGMENT_COLUMNS)
+    else:
+        columns = "*"
+
+    query = f"""
+        SELECT {columns}
+        FROM basenetwork_linksegment
+        WHERE annotated = 'Y';
     """
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+
+
+def get_link_segments_for_annotated_nodes(
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if ids_only:
+        columns = "ls.link_segment_id"
+    elif exclude_geom:
+        columns = ", ".join([f"ls.{col}" for col in LINK_SEGMENT_COLUMNS])
+    else:
+        columns = "ls.*"
+
+    query = f"""
+        SELECT {columns}
+        FROM basenetwork_linksegment ls
+        JOIN basenetwork_link l ON l.link_id = ls.link_id
+        JOIN basenetwork_node n1 ON n1.node_id = l.u_id
+        JOIN basenetwork_node n2 ON n2.node_id = l.v_id
+        WHERE n1.annotated = 'Y' OR n2.annotated = 'Y';
+    """
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+
+# ───── SECTIONS & TURNS ─────
+
+def get_sections_by_link_segment_ids(
+        link_segment_ids: list[str],
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
     if not link_segment_ids:
         raise ValueError("No link_segment_ids provided.")
 
-    formatted_ids = ",".join(f"'{sid}'" for sid in link_segment_ids)
+    placeholders = ",".join("%s" for _ in link_segment_ids)
+
+    if ids_only:
+        columns = "s.id"
+    elif exclude_geom:
+        columns = ", ".join([f"s.{col}" for col in SECTION_COLUMNS]) + ", cp.base_network_id::text"
+    else:
+        columns = "s.*, cp.base_network_id::text"
 
     query = f"""
-        SELECT s.id AS section_id,
-               s.link_segment_id,
-               s.component,
-               cp.base_network_id::text,
-               s.geom
+        SELECT {columns}
         FROM topologyannotator_section s
         JOIN basenetwork_linksegment ls ON ls.link_segment_id = s.link_segment_id
         JOIN basenetwork_camerapoint cp ON cp.camera_point_id = ls.camera_point_id
-        WHERE s.link_segment_id IN ({formatted_ids});
+        WHERE s.link_segment_id IN ({placeholders});
     """
 
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
+    params = tuple(link_segment_ids)
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL, params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+
+
+def get_turns_by_node_ids(
+        node_ids: list[str],
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if not node_ids:
+        raise ValueError("No node_ids provided.")
+
+    placeholders = ",".join("%s" for _ in node_ids)
+
+    if ids_only:
+        columns = "t.id"
+    elif exclude_geom:
+        columns = ", ".join([f"t.{col}" for col in TURN_COLUMNS]) + ", n.base_network_id::text"
+    else:
+        columns = "t.*, n.base_network_id::text"
+
+    query = f"""
+        SELECT {columns}
+        FROM topologyannotator_turn t
+        JOIN basenetwork_node n ON n.node_id = t.node_id
+        WHERE t.node_id IN ({placeholders});
+    """
+
+    params = tuple(node_ids)
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL, params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
