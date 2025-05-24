@@ -1,0 +1,24 @@
+{
+  "classes": [
+    {
+      "name": "Median",
+      "label": "Median"
+    },
+    {
+      "name": "Gap",
+      "label": "Gap"
+    },
+    {
+      "name": "Kerb",
+      "label": "Kerb"
+    },
+    {
+      "name": "Speed hump",
+      "label": "Speed hump"
+    },
+    {
+      "name": "Split island",
+      "label": "Split island"
+    }
+  ]
+}

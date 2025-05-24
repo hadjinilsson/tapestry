@@ -191,10 +191,25 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--filter",
+        choices=['area', 'base-network'],
+        help="How to filter the data",
+    )
+    parser.add_argument(
         "--area_names",
         nargs="+",
         type=str,
-        help="List of AnnotationArea namess to include. If omitted, all areas are used.",
+        help="List of AnnotationArea names to include if filtered by annotation area. If omitted, all areas are used.",
+    )
+    parser.add_argument(
+        "--base-network-id",
+        type=str,
+        help="Base network ID (e.g. 'garp25') if filtered by base network"
+    )
+    parser.add_argument(
+        "--skip-image-download",
+        action="store_true",
+        help="If set, will not download images."
     )
     parser.add_argument(
         "--object-prediction-run-id",

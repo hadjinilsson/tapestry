@@ -1,0 +1,20 @@
+{
+  "classes": [
+    {
+      "name": "Bike symbol",
+      "label": "Bike symbol"
+    },
+    {
+      "name": "Bus symbol",
+      "label": "Bus symbol"
+    },
+    {
+      "name": "Speed symbol",
+      "label": "Speed symbol"
+    },
+    {
+      "name": "Other symbol",
+      "label": "Other symbol"
+    }
+  ]
+}

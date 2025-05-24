@@ -1,0 +1,24 @@
+{
+  "classes": [
+    {
+      "name": "Horizontal stop line",
+      "label": "Line",
+      "orientation": "Horizontal",
+      "marking": "Stop"
+    },
+    {
+      "name": "Horizontal yield line",
+      "label": "Line",
+      "orientation": "Horizontal",
+      "marking": "Yield"
+    },
+    {
+      "name": "Other line",
+      "label": "Line"
+    },
+    {
+      "name": "Dash",
+      "label": "Dash"
+    }
+  ]
+}

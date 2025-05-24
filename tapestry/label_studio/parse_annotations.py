@@ -1,9 +1,11 @@
 import os
+import json
 import requests
 import random
 from pathlib import Path
 from dotenv import load_dotenv
 from tapestry.label_studio.aggregate import aggregate_labels
+from collections import defaultdict
 
 load_dotenv()
 
@@ -13,7 +15,6 @@ LABEL_STUDIO_API_TOKEN = os.getenv("LABEL_STUDIO_API_TOKEN")
 
 TRAIN_RATIO = 0.8
 
-
 def fetch_annotations():
     url = f"{LABEL_STUDIO_URL}/api/projects/{LABEL_STUDIO_PROJECT_ID}/export?exportType=JSON"
     headers = {"Authorization": f"Token {LABEL_STUDIO_API_TOKEN}"}
@@ -22,11 +23,104 @@ def fetch_annotations():
         raise Exception(f"Failed to fetch annotations: {response.text}")
     return response.json()
 
+def group_result_items(result):
+    grouped = defaultdict(lambda: {"choices": defaultdict(set)})
 
-def parse_annotations(output_dir: Path, min_group_size: int | None = None):
+    for item in result:
+        region_id = item["id"]
+
+        if item["type"] == "rectanglelabels":
+            grouped[region_id]["rectangle"] = item
+
+        elif item["type"] == "choices":
+            name = item["from_name"]
+            values = item["value"].get("choices", [])
+            if not isinstance(values, list):
+                values = [values]
+            for v in values:
+                grouped[region_id]["choices"][name].add(v)
+
+    merged = []
+    for group in grouped.values():
+        if "rectangle" not in group:
+            continue
+        rect_item = group["rectangle"].copy()
+        rect_item["value"] = rect_item["value"].copy()
+        rect_item["value"]["choices"] = {
+            k: sorted(list(v)) for k, v in group["choices"].items()
+        }
+        merged.append(rect_item)
+
+    return merged
+
+def matches_class(item, definition):
+    if item["value"]["rectanglelabels"][0] != definition["label"]:
+        return False
+
+    choices = item["value"].get("choices", {})
+
+    for k, v in definition.items():
+        if k in {"name", "label"}:
+            continue
+
+        actual = choices.get(k)
+        if actual is None:
+            return False
+
+        # Special strict set match for multi-choice (e.g. 'turn')
+        if k == "turn":
+            if not isinstance(actual, list) or not isinstance(v, list):
+                return False
+            if set(actual) != set(v):
+                return False
+            continue  # Already matched
+
+        # Normalize 1-element lists to scalar
+        if isinstance(actual, list) and len(actual) == 1:
+            actual = actual[0]
+
+        if isinstance(v, list):
+            if actual not in v:
+                return False
+        else:
+            if actual != v:
+                return False
+
+    return True
+
+def manual_remap_labels(annotations, remap_paths):
+    merged_classes = []
+    for path in remap_paths:
+        with open(path, "r") as f:
+            config = json.load(f)
+            merged_classes.extend(config.get("classes", []))
+
+    remapped = []
+    for item in annotations:
+        merged_results = group_result_items(item.get("annotations", [])[0].get("result", []))
+        new_results = []
+        for result in merged_results:
+            for definition in merged_classes:
+                if matches_class(result, definition):
+                    new_result = result.copy()
+                    new_result["value"] = new_result["value"].copy()
+                    new_result["value"]["rectanglelabels"] = [definition["name"]]
+                    new_results.append(new_result)
+                    break
+        if new_results:
+            new_item = item.copy()
+            new_item["annotations"] = [{"result": new_results}]
+            remapped.append(new_item)
+    return remapped
+
+def parse_annotations(output_dir: Path, remap_mode: str = "none", remap_configs: list[Path] | None = None, min_group_size: int | None = None):
     annotations = fetch_annotations()
-    if min_group_size is not None:
+    if remap_mode == "auto":
         annotations = aggregate_labels(annotations, min_group_size=min_group_size)
+    elif remap_mode == "manual":
+        if not remap_configs:
+            raise ValueError("Manual remap mode requires --remap-configs")
+        annotations = manual_remap_labels(annotations, remap_configs)
 
     label_map = {}
     label_id_counter = 0
@@ -92,8 +186,7 @@ def parse_annotations(output_dir: Path, min_group_size: int | None = None):
         f.write("]\n")
 
     print("✅ Annotations parsed and data.yaml written.")
-    return split_map  # Dict[str, str]: image_stub → 'train' or 'val'
-
+    return split_map
 
 if __name__ == "__main__":
     output_dir = Path("data")

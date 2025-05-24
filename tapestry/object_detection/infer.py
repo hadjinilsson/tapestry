@@ -13,9 +13,10 @@ from tqdm import tqdm
 
 load_dotenv()
 
+DATA_ROOT = Path("data")
 S3_BUCKET_MODELS = os.getenv("BUCKET_NAME_MODELS")
 S3_BUCKET_PREDICTIONS = os.getenv("BUCKET_NAME_PREDICTIONS")
-TEMP_BATCH_DIR = Path("data/images/temp_infer_batch")
+TEMP_BATCH_DIR = DATA_ROOT / "object_detection" / "inference_tmp_images"
 TEMP_BATCH_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─────────────── DOWNLOAD IMAGES ───────────────
@@ -91,10 +92,10 @@ def run_inference(model_path: Path, run_id: str, base_network: str, camera_ids: 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--base-network")
-    group.add_argument("--camera-point-list", help="Path to .txt file with one camera_point_id per line")
-    group.add_argument("--use-annotated-link-segments", action="store_true")
+    filter_type = parser.add_mutually_exclusive_group(required=True)
+    filter_type.add_argument("--base-network", nargs="+", type=str, help ="Filter data by one or multiple base networks")
+    filter_type.add_argument("--camera-point-list", help="Path to .txt file with one camera_point_id per line")
+    filter_type.add_argument("--use-annotated-link-segments", action="store_true")
     parser.add_argument("--batch-size", type=int, default=250)
     parser.add_argument("--no-upload", action="store_true", help="Disable S3 upload")
     parser.add_argument("--s3-prefix", default="object_detection")

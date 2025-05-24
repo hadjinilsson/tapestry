@@ -1,0 +1,42 @@
+{
+  "classes": [
+    {
+      "name": "On-road parking spot",
+      "label": "Parking spot",
+      "location": "This road"
+    },
+    {
+      "name": "On-road parking spot",
+      "label": "Parking spot",
+      "location": "Other road"
+    },
+    {
+      "name": "Parking spot in lot",
+      "label": "Parking spot",
+      "location": "Parking lot"
+    },
+    {
+      "name": "Parking spot in other locations",
+      "label": "Parking spot"
+    },
+    {
+      "name": "On-road parking zone",
+      "label": "Parking zone",
+      "location": "This road"
+    },
+    {
+      "name": "On-road parking zone",
+      "label": "Parking zone",
+      "location": "Other road"
+    },
+    {
+      "name": "Parking spot in zone",
+      "label": "Parking zone",
+      "location": "Parking lot"
+    },
+    {
+      "name": "Parking zone in other locations",
+      "label": "Parking zone"
+    }
+  ]
+}

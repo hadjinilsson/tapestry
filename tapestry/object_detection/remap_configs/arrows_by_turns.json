@@ -1,0 +1,39 @@
+{
+  "classes": [
+    {
+      "name": "L-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Left"]
+    },
+    {
+      "name": "LT-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Left", "Through"]
+    },
+    {
+      "name": "LTR-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Left", "Through", "Right"]
+    },
+    {
+      "name": "LR-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Left", "Right"]
+    },
+    {
+      "name": "T-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Through"]
+    },
+    {
+      "name": "TR-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Through", "Right"]
+    },
+    {
+      "name": "R-arrow",
+      "label": "Arrow symbol",
+      "turn": ["Right"]
+    }
+  ]
+}

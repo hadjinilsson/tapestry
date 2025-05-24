@@ -1,0 +1,13 @@
+{
+  "classes": [
+    {
+      "name": "Zebra crossing",
+      "label": "Crossing",
+      "crossing": "Zebra"
+    },
+    {
+      "name": "Other crossing",
+      "label": "Crossing"
+    }
+  ]
+}

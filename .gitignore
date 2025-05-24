@@ -22,11 +22,8 @@ weights/
 # Data
 *.csv
 *.parquet
-*.json
 *.zip
 *.tar.gz
-
-# Data
 data/
 
 # Logs and checkpoints

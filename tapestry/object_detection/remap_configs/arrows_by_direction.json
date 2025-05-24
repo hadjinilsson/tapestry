@@ -1,0 +1,18 @@
+{
+  "classes": [
+    {
+      "name": "Upwards arrow",
+      "label": "Arrow symbol",
+      "direction": "Upwards"
+    },
+    {
+      "name": "Downwards arrow",
+      "label": "Arrow symbol",
+      "direction": "Downwards"
+    },
+    {
+      "name": "Arrow in other direction",
+      "label": "Arrow symbol"
+    }
+  ]
+}

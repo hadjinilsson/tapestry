@@ -1,0 +1,16 @@
+{
+  "classes": [
+    {
+      "name": "Stripes",
+      "label": "Stripes"
+    },
+    {
+      "name": "Chevrons",
+      "label": "Chevrons"
+    },
+    {
+      "name": "Hatch",
+      "label": "Hatch"
+    }
+  ]
+}

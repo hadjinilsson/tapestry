@@ -1,0 +1,38 @@
+{
+  "classes": [
+    {
+      "name": "Car driving upwards",
+      "label": "Car",
+      "direction": "Upwards",
+      "movement": "Driving"
+    },
+    {
+      "name": "Car driving downwards",
+      "label": "Car",
+      "direction": "Downwards",
+      "movement": "Driving"
+    },
+    {
+      "name": "Car parked upwards",
+      "label": "Car",
+      "direction": "Upwards",
+      "movement": "Parked"
+    },
+    {
+      "name": "Car parked downwards",
+      "label": "Car",
+      "direction": "Downwards",
+      "movement": "Parked"
+    },
+    {
+      "name": "Car driving",
+      "label": "Car",
+      "movement": "Driving"
+    },
+    {
+      "name": "Car parked",
+      "label": "Car",
+      "movement": "Parked"
+    }
+  ]
+}
