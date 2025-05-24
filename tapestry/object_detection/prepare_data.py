@@ -12,7 +12,7 @@ counter = Counter()
 
 # ───────────── TRAINING MODE ─────────────
 
-def prepare_training_data(remap_mode: str, remap_configs: list[Path] | None, min_group_size: int | None):
+def prepare_data(remap_mode: str, remap_configs: list[Path] | None, min_group_size: int | None):
     print("🧠 Preparing data")
 
     if (DATA_ROOT / "object_detection" / "images").exists():
@@ -83,7 +83,7 @@ def main():
 
     remap_paths = [MODULE_ROOT / "remap_configs" / f"{name}.json" for name in args.remap_configs]
 
-    prepare_training_data(
+    prepare_data(
         remap_mode=args.remap,
         remap_configs=remap_paths,
         min_group_size=args.min_group_size

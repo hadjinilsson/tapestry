@@ -12,6 +12,15 @@ DB_URL = os.getenv("TOPANIMEX_DB_URL")
 
 # ───── COLUMN SETS ─────
 
+CAMERA_POINT_COLUMNS = [
+    "camera_point_id",
+    "base_network_id",
+    "bearing",
+    "length",
+    "extracted",
+    "sampled_for_annotation",
+]
+
 NODE_COLUMNS = [
     "node_id",
     "base_network_id",
@@ -55,6 +64,29 @@ def get_base_networks() -> pd.DataFrame:
     """
     return pd.read_sql(query, con=DB_URL)
 
+# ───── CAMERA POINTS ─────
+
+def get_camera_points_by_ids(
+        camera_point_ids: list[str],
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if exclude_geom:
+        columns = ", ".join(CAMERA_POINT_COLUMNS)
+    else:
+        columns = "*"
+
+    placeholders = ", ".join(["%s"] * len(camera_point_ids))
+    query = f"""
+        SELECT {columns}
+        FROM basenetwork_camerapoint
+        WHERE camera_point_id IN ({placeholders})
+    """
+
+    params = tuple(camera_point_ids)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params).to_crs(3857)
+    return gdf
+
 # ───── NODES ─────
 
 def get_nodes_by_base_network(
@@ -80,10 +112,12 @@ def get_nodes_by_base_network(
     params = tuple(base_network_ids)
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL, params=params)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 
-def get_nodes_in_annotation_areas(
+def get_nodes_by_annotation_area(
         buffer_meters: float = 50.0,
         area_names: list[str] | None = None,
         ids_only: bool = False,
@@ -115,7 +149,9 @@ def get_nodes_in_annotation_areas(
     params = (buffer_meters,) + tuple(area_names or [])
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL, params=params)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 
 def get_annotated_nodes(
@@ -137,7 +173,31 @@ def get_annotated_nodes(
     """
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom")
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
+
+def get_all_nodes(
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if ids_only:
+        columns = "node_id"
+    elif exclude_geom:
+        columns = ", ".join(NODE_COLUMNS)
+    else:
+        columns = "*"
+
+    query = f"""
+        SELECT {columns}
+        FROM basenetwork_node;
+    """
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 # ───── LINK SEGMENTS ─────
 
@@ -165,10 +225,12 @@ def get_link_segments_by_base_network(
     params = tuple(base_network_ids)
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL, params=params)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 
-def get_link_segments_in_annotation_areas(
+def get_link_segments_by_annotation_area(
         buffer_meters: float = 25.0,
         area_names: list[str] | None = None,
         ids_only: bool = False,
@@ -200,7 +262,9 @@ def get_link_segments_in_annotation_areas(
     params = (buffer_meters,) + tuple(area_names or [])
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL, params=params)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857", params=params)
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 
 def get_annotated_link_segments(
@@ -222,7 +286,9 @@ def get_annotated_link_segments(
     """
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 
 def get_link_segments_for_annotated_nodes(
@@ -247,7 +313,31 @@ def get_link_segments_for_annotated_nodes(
     """
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
+
+def get_all_link_segments(
+        ids_only: bool = False,
+        exclude_geom: bool = False
+) -> pd.DataFrame | gpd.GeoDataFrame:
+
+    if ids_only:
+        columns = "link_segment_id"
+    elif exclude_geom:
+        columns = ", ".join(LINK_SEGMENT_COLUMNS)
+    else:
+        columns = "*"
+
+    query = f"""
+        SELECT {columns}
+        FROM basenetwork_linksegment;
+    """
+    if ids_only or exclude_geom:
+        return pd.read_sql(query, con=DB_URL)
+    gdf = gpd.read_postgis(query, con=DB_URL, geom_col="geom_3857")
+    gdf = gdf.drop(columns=["geom"], errors="ignore").rename(columns={"geom_3857": "geom"}).set_geometry("geom")
+    return gdf
 
 # ───── SECTIONS & TURNS ─────
 
@@ -280,7 +370,7 @@ def get_sections_by_link_segment_ids(
     params = tuple(link_segment_ids)
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL, params=params)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params).to_crs(3857)
 
 
 def get_turns_by_node_ids(
@@ -311,4 +401,4 @@ def get_turns_by_node_ids(
     params = tuple(node_ids)
     if ids_only or exclude_geom:
         return pd.read_sql(query, con=DB_URL, params=params)
-    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params)
+    return gpd.read_postgis(query, con=DB_URL, geom_col="geom", params=params).to_crs(3857)

@@ -28,7 +28,6 @@ class LaneDetectionDataset(Dataset):
             max_shift: float = 10.0,
             max_lanes: int = 5,
             max_class_weight: float = 100.0,
-            num_obj_pred_classes: int = 15,
     ):
         # Arguments
         self.data_root = Path(data_root)
@@ -42,7 +41,6 @@ class LaneDetectionDataset(Dataset):
         self.max_shift = max_shift
         self.max_lanes = max_lanes
         self.max_class_weight = max_class_weight
-        self.num_obj_pred_classes = num_obj_pred_classes
 
         # Derived
         self.pixels_per_meter = dim_pixels / dim_gsd
@@ -70,7 +68,7 @@ class LaneDetectionDataset(Dataset):
         self.order_vu = pd.read_parquet(self.geometry_dir / "segment_order_vu.parquet")
 
         # Object predictions
-        self.obj_predictions = self._load_all_obj_preds()
+        self.obj_predictions, self.num_obj_pred_classes = self._load_all_obj_preds()
 
         # Build link_id to ordered segments map
         self.link_order = self._build_link_order()
@@ -104,11 +102,15 @@ class LaneDetectionDataset(Dataset):
 
     def _load_all_obj_preds(self):
         obj_preds = {}
+        all_labels = set()
+
         for path in self.obj_preds_dir.glob("*.parquet"):
             df = pd.read_parquet(path)
             for cam_id, group in df.groupby("camera_point_id"):
                 obj_preds[cam_id] = group
-        return obj_preds
+                all_labels.update(group["class"].unique())
+
+        return obj_preds, len(all_labels)
 
     def __len__(self):
         return len(self.samples)

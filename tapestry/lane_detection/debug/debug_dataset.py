@@ -55,10 +55,11 @@ train_ds = LaneDetectionDataset(data_root=Path('data'), mode="train")
 
 # validate_shapes(train_ds)
 
-stats = train_ds.compute_statistics()
+# stats = train_ds.compute_statistics()
 
 # sample = train_ds[5]
-# sample = train_ds[np.random.randint(len(train_ds))]
+for i in range(100):
+    sample = train_ds[np.random.randint(len(train_ds))]
 # show_sample_with_predictions(sample)
 
 # sample = inf_ds[np.random.randint(len(inf_ds))]

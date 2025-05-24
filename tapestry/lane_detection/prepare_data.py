@@ -7,8 +7,7 @@ from pathlib import Path
 from shapely.geometry import LineString
 from dotenv import load_dotenv
 
-from tapestry.utils.db import get_link_segments_near_annotation_areas, get_sections_by_link_segment_ids
-from tapestry.utils.db import get_base_network_crs
+from tapestry.utils import db
 from tapestry.utils.image_fetching import download_images_for_camera_points
 from tapestry.utils.image_fetching import download_images_for_camera_points_threaded
 from tapestry.utils.s3 import download_dir_from_s3
@@ -22,208 +21,202 @@ GEOMETRY_DIR.mkdir(parents=True, exist_ok=True)
 S3_BUCKET = os.getenv("BUCKET_NAME_PREDICTIONS")
 
 
+def get_crs_lookup() -> dict[str, int]:
+    base_networks = db.get_base_networks()
+    return dict(zip(base_networks["base_network_id"], base_networks["crs"]))
+
+
 def compute_bearing(geom: LineString) -> float:
     x1, y1 = geom.coords[0]
     x2, y2 = geom.coords[-1]
     return math.degrees(math.atan2(y2 - y1, x2 - x1)) % 360
 
 
-def main(
-        annotation_area_ids: list[str] | None = None,
-        object_prediction_run_id: str = None,
-        threads: int | None = None
+def prepare_data(
+        segs_all: gpd.GeoDataFrame,
+        crs_lookup: dict[str, int],
+        object_prediction_run_id: str,
+        skip_image_download: bool = False,
+        threads: int | None = None,
 ):
-    # Step 1: Fetch all link segments within 50m of annotation areas
-    print("🟡 Step 1: Fetching link segments near annotation areas...")
-    all_link_segments = get_link_segments_near_annotation_areas(
-        buffer_meters=50,
-        annotation_area_names=annotation_area_ids
+
+    print("🟡 Preparing data...")
+
+    print("🟡 Calculating camera point offsets...")
+    segs_all['base_network_id'] = segs_all.link_segment_id.str.split('_', expand=True)[0]
+    caps = db.get_camera_points_by_ids(list(segs_all.dropna(subset='camera_point_id').camera_point_id.unique()))
+    segs_all = segs_all.merge(
+        caps[['camera_point_id', 'geom']].rename(columns={'geom': 'camera_geom'}),
+        how='left',
+        on='camera_point_id',
     )
-    print(f"✅ Retrieved {len(all_link_segments)} candidate link segments.")
+    segs_all = get_camera_point_offset(segs_all, crs_lookup)
+    segs_all_path = GEOMETRY_DIR / "link_segments_all.parquet"
+    segs_all.to_parquet(segs_all_path)
+    print(f"✅ Saved all link segments with camera offsets to {segs_all_path}")
 
-    # Ste 2: Calculate camera point offsets
-    crs_lookup = get_base_network_crs()
-    all_link_segments = get_camera_point_offset(all_link_segments, crs_lookup)
+    print("🟡 Filter annotated segments with valid camera point...")
+    segs_annotated = segs_all[(segs_all["annotated"] == "Y") & (segs_all["camera_point_id"].notnull())].copy()
+    segs_annotated.to_parquet(GEOMETRY_DIR / "link_segments_annotated.parquet")
+    print(f"✅ Filtered to {len(segs_annotated)} annotated segments.")
 
-    all_link_path = GEOMETRY_DIR / "link_segments_all.parquet"
-    all_link_segments.to_parquet(all_link_path)
-    print(f"📦 Saved all link segments to {all_link_path}")
-
-    # Step 3: Filter annotated segments with valid camera point
-    annotated_link_segments = all_link_segments[
-        (all_link_segments["annotated"] == "Y") &
-        (all_link_segments["camera_point_id"].notnull())
-    ].copy()
-    annotated_link_segments.to_parquet(GEOMETRY_DIR / "link_segments_annotated.parquet")
-    print(f"✅ Filtered to {len(annotated_link_segments)} annotated segments.")
-
-    # Step 4: Download images for camera points
-    camera_point_ids = all_link_segments["camera_point_id"].unique().tolist()
-
+    # Download images for camera points
+    cap_ids = segs_all["camera_point_id"].dropna().unique().tolist()
     images_dir = DATA_ROOT / "lane_detection" / "images"
-    if threads and threads > 0:
-        download_images_for_camera_points_threaded(camera_point_ids, images_dir, max_workers=args.threads)
+    if not skip_image_download:
+        print("🟡 Downloading images...")
+        if threads and threads > 0:
+            download_images_for_camera_points_threaded(cap_ids, images_dir, max_workers=threads)
+        else:
+            download_images_for_camera_points(cap_ids, images_dir)
+        downloaded = [f.stem for f in images_dir.glob("*.png")]
+        missing = sorted(set(cap_ids) - set(downloaded))
+        if missing:
+            print(f"⚠️ {len(missing)} images were not downloaded.")
+        print(f"✅ Image download complete.")
     else:
-        download_images_for_camera_points(camera_point_ids, images_dir)
-    print(f"✅ Images downloaded to {images_dir}")
+        print("⏭️ Skipping image download")
 
-    downloaded = [f.stem for f in images_dir.glob("*.png")]
-    missing = sorted(set(camera_point_ids) - set(downloaded))
-    if missing:
-        print(f"⚠️ {len(missing)} images were not downloaded.")
-
-    # Step 5: Download and validate object detection predictions
-    print("🟡 Step 5: Downloading object detection predictions...")
+    print("🟡 Downloading object detection predictions...")
     predictions_dir = DATA_ROOT / "lane_detection" / "predictions"
     s3_prefix = f"object_detection/{object_prediction_run_id}"
     download_dir_from_s3(s3_prefix=s3_prefix, local_dir=predictions_dir, bucket=S3_BUCKET)
-
-    pred_camera_ids = set()
+    pred_cap_ids = set()
     for parquet_path in predictions_dir.glob("*.parquet"):
         try:
-            df_pred = pd.read_parquet(parquet_path)
-            pred_camera_ids.update(df_pred["camera_point_id"].unique())
+            obj_preds = pd.read_parquet(parquet_path)
+            pred_cap_ids.update(obj_preds["camera_point_id"].unique())
         except Exception as e:
             print(f"⚠️ Could not read {parquet_path.name}: {e}")
+    print(f"✅ Object predictions download complete.")
 
-    existing_images = set(f.stem for f in images_dir.glob("*.png"))
-    valid_cp_ids = pred_camera_ids & existing_images
+    print("🟡 Filtering link segments with images...")
+    if not skip_image_download:
+        existing_images = set(f.stem for f in images_dir.glob("*.png"))
+        valid_cap_ids = pred_cap_ids & existing_images
+    else:
+        valid_cap_ids = pred_cap_ids
+    segs_train = segs_annotated[segs_annotated["camera_point_id"].isin(valid_cap_ids)].copy()
+    segs_train.to_parquet(GEOMETRY_DIR / "link_segments_training.parquet")
+    print(f"✅ Final training set: {len(segs_train)} link segments with image + prediction.")
 
-    training_link_segments = annotated_link_segments[
-        annotated_link_segments["camera_point_id"].isin(valid_cp_ids)
-    ].copy()
+    # Fetch sections for the final training link segments
+    print("🟡 Fetching sections...")
+    segs_final_ids = segs_train["link_segment_id"].tolist()
+    sections = db.get_sections_by_link_segment_ids(segs_final_ids)
+    sections.to_parquet(GEOMETRY_DIR / "sections.parquet")
+    print(f"✅ Sections download complete.")
 
-    training_link_segments.to_parquet(GEOMETRY_DIR / "link_segments_training.parquet")
-    print(f"✅ Final training set: {len(training_link_segments)} link segments with image + prediction.")
+    # Compute neighbors for all final link segments
+    print("🟡 Computing neighbor relationships...")
+    neighbours = compute_neighbours(segs_train, crs_lookup)
+    neighbours.to_parquet(GEOMETRY_DIR / "neighbours.parquet")
+    print(f"✅ Neighbours computed.")
 
-    # Step 6: Fetch sections for the final training link segments
-    print("🟡 Step 6: Fetching sections...")
-    final_segment_ids = training_link_segments["link_segment_id"].tolist()
-    sections = get_sections_by_link_segment_ids(final_segment_ids)
-    sections_path = GEOMETRY_DIR / "sections.parquet"
-    sections.to_parquet(sections_path)
-    print(f"✅ Saved {len(sections)} sections to {sections_path}")
-
-    # Step 7: Compute neighbors for all final link segments
-    print("🟡 Step 7: Computing neighbor relationships...")
-    neighbours = compute_neighbours(training_link_segments, crs_lookup)
-    neighbours_path = GEOMETRY_DIR / "neighbours.parquet"
-    neighbours.to_parquet(neighbours_path)
-    print(f"✅ Saved neighbor list to {neighbours_path} ({len(neighbours)} rows)")
-
-    # Step 8: Extract link ordering info
-    print("🟡 Step 8: Extract link ordering info...")
-
+    # Extract link ordering info
+    print("🟡 Extract link ordering info...")
     # Extract necessary fields: link_id, segment_ix_uv, segment_ix_vu, link_segment_id
-    order_df = all_link_segments[[
+    seg_order = segs_all[[
         "link_segment_id",
         "link_id",
         "segment_ix_uv",
         "segment_ix_vu"
     ]].copy()
-
     # Sort and group
-    order_df_uv = order_df.sort_values(["link_id", "segment_ix_uv"])
-    order_df_vu = order_df.sort_values(["link_id", "segment_ix_vu"])
-
+    seg_order_uv = seg_order.sort_values(["link_id", "segment_ix_uv"])
+    seg_order_vu = seg_order.sort_values(["link_id", "segment_ix_vu"])
     # Save both orderings
-    order_df_uv.to_parquet(GEOMETRY_DIR / "segment_order_uv.parquet", index=False)
-    order_df_vu.to_parquet(GEOMETRY_DIR / "segment_order_vu.parquet", index=False)
-
+    seg_order_uv.to_parquet(GEOMETRY_DIR / "segment_order_uv.parquet", index=False)
+    seg_order_vu.to_parquet(GEOMETRY_DIR / "segment_order_vu.parquet", index=False)
     print(f"✅ Saved ordered link segment indices to: \n  - segment_order_uv.parquet\n  - segment_order_vu.parquet")
 
-    # Step 9: Reproject geometries to local CRS (per base network)
-    print("🟡 Step 8: Reprojecting link segments and sections by base network...")
-
-    all_link_segments['is_training'] = True
-    all_link_segments.loc[
-        ~all_link_segments.link_segment_id.isin(training_link_segments.link_segment_id),
-        'is_training'
-    ] = False
-
-    projected_segs = []
-    projected_sections = []
-
-    for base_network_id, epsg in crs_lookup.items():
-        print(f"  ↪ Reprojecting base network {base_network_id} to EPSG:{epsg}...")
+    # Reproject geometries to local CRS (per base network)
+    print("🟡 Reprojecting link segments and sections by base network...")
+    segs_all['is_training'] = True
+    segs_all.loc[~segs_all.link_segment_id.isin(segs_train.link_segment_id), 'is_training'] = False
+    segs_proj = []
+    secs_proj = []
+    for bn_id, epsg in crs_lookup.items():
+        print(f"  ↪ Reprojecting base network {bn_id} to EPSG:{epsg}...")
 
         # --- Link Segments ---
-        ls_subset = all_link_segments[all_link_segments["base_network_id"] == base_network_id].copy()
-        if not ls_subset.empty:
-            gdf_ls = gpd.GeoDataFrame(ls_subset, geometry="geom", crs="EPSG:3857")
-            gdf_ls_proj = gdf_ls.to_crs(epsg=epsg)
-            gdf_ls_proj["geom_proj"] = gdf_ls_proj.geometry
-            gdf_ls_proj["length_proj"] = gdf_ls_proj.geometry.length
-            df_ls_proj = {}
-            for col in gdf_ls_proj.drop(columns='geom').columns:
-                df_ls_proj[col] = list(gdf_ls_proj[col])
-            df_ls_proj = pd.DataFrame(df_ls_proj)
-            projected_segs.append(df_ls_proj)
+        seg_subset = segs_all[segs_all["base_network_id"] == bn_id].copy()
+        if not seg_subset.empty:
+            gdf_seg = seg_subset.to_crs(epsg=epsg)
+            gdf_seg = gdf_seg[gdf_seg.is_valid]
+            gdf_seg["geom_proj"] = gdf_seg.geometry
+            gdf_seg["length_proj"] = gdf_seg.geometry.length
+            df_seg = {}
+            for col in gdf_seg.drop(columns='geom').columns:
+                df_seg[col] = list(gdf_seg[col])
+            df_seg = pd.DataFrame(df_seg)
+            segs_proj.append(df_seg)
 
         # --- Sections ---
-        s_subset = sections[sections["base_network_id"] == base_network_id].copy()
-        if not s_subset.empty:
-            gdf_sec = gpd.GeoDataFrame(s_subset, geometry="geom", crs="EPSG:4326")
-            gdf_sec_proj = gdf_sec.to_crs(epsg=epsg)
-            gdf_sec_proj["geom_proj"] = gdf_sec_proj.geometry
-            gdf_sec_proj["length_proj"] = gdf_sec_proj.geometry.length
-            df_sec_proj = {}
-            for col in gdf_sec_proj.drop(columns='geom').columns:
-                df_sec_proj[col] = list(gdf_sec_proj[col])
-            df_sec_proj = pd.DataFrame(df_sec_proj)
-            projected_sections.append(df_sec_proj)
+        sec_subset = sections[sections["base_network_id"] == bn_id].copy()
+        if not sec_subset.empty:
+            gdf_sec = sec_subset.to_crs(epsg=epsg)
+            gdf_sec = gdf_sec[gdf_sec.is_valid]
+            gdf_sec["geom_proj"] = gdf_sec.geometry
+            gdf_sec["length_proj"] = gdf_sec.geometry.length
+            df_sec = {}
+            for col in gdf_sec.drop(columns='geom').columns:
+                df_sec[col] = list(gdf_sec[col])
+            df_sec = pd.DataFrame(df_sec)
+            secs_proj.append(df_sec)
 
-    if projected_segs:
-        df_segs_proj = pd.concat(projected_segs, ignore_index=True)
-        df_segs_proj["bearing"] = df_segs_proj["geom_proj"].apply(compute_bearing)
-        df_segs_proj["geom_proj"] = df_segs_proj["geom_proj"].apply(lambda g: g.wkb)
-        df_segs_proj.to_parquet(GEOMETRY_DIR / "link_segments_projected.parquet")
-        print(f"✅ Saved projected link segments ({len(df_segs_proj)} rows)")
+    if segs_proj:
+        segs = pd.concat(segs_proj, ignore_index=True)
+        segs["bearing"] = segs["geom_proj"].apply(compute_bearing)
+        segs["geom_proj"] = segs["geom_proj"].apply(lambda g: g.wkb)
+        segs.to_parquet(GEOMETRY_DIR / "link_segments_projected.parquet")
+        print(f"✅ Saved projected link segments ({len(segs)} rows)")
 
-    if projected_sections:
-        df_sections_proj = pd.concat(projected_sections, ignore_index=True)
-        df_sections_proj["bearing"] = df_sections_proj["geom_proj"].apply(compute_bearing)
-        df_sections_proj["geom_proj"] = df_sections_proj["geom_proj"].apply(lambda g: g.wkb)
-        df_sections_proj.to_parquet(GEOMETRY_DIR / "sections_projected.parquet")
-        print(f"✅ Saved projected sections ({len(df_sections_proj)} rows)")
+    if secs_proj:
+        secs = pd.concat(secs_proj, ignore_index=True)
+        secs["bearing"] = secs["geom_proj"].apply(compute_bearing)
+        secs["geom_proj"] = secs["geom_proj"].apply(lambda g: g.wkb)
+        secs.to_parquet(GEOMETRY_DIR / "sections_projected.parquet")
+        print(f"✅ Saved projected sections ({len(secs)} rows)")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--object-detection-run-id", required=True, help="S3 run ID for object detection predictions")
+    filter_type = parser.add_mutually_exclusive_group(required=True)
+    filter_type.add_argument("--base-networks", nargs="+", type=str)
+    filter_type.add_argument("--annotation-areas", nargs="*", type=str)
+    filter_type.add_argument("--annotated-link-segments", action="store_true")
+    filter_type.add_argument("--annotated-nodes", action="store_true")
+    filter_type.add_argument("--all", action="store_true")
+    parser.add_argument("--skip-image-download", action="store_true")
+    parser.add_argument("--threads", type=int)
+    args = parser.parse_args()
+
+    # Fetch link segments
+    if args.annotated_link_segments:
+        link_segments = db.get_annotated_link_segments()
+    elif args.annotated_nodes:
+        link_segments = db.get_link_segments_for_annotated_nodes()
+    elif args.annotation_areas is not None:
+        area_names = args.annotation_areas if args.annotation_areas else None
+        link_segments = db.get_link_segments_by_annotation_area(area_names=area_names)
+    elif args.base_networks:
+        link_segments = db.get_link_segments_by_base_network(args.base_networks)
+    else:
+        link_segments = db.get_all_link_segments()
+
+    # Construct CRS lookup from base_networks table
+    crs_lookup = get_crs_lookup()
+
+    prepare_data(
+        segs_all=link_segments,
+        crs_lookup=crs_lookup,
+        object_prediction_run_id=args.object_detection_run_id,
+        skip_image_download=args.skip_image_download,
+        threads=args.threads,
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--filter",
-        choices=['area', 'base-network'],
-        help="How to filter the data",
-    )
-    parser.add_argument(
-        "--area_names",
-        nargs="+",
-        type=str,
-        help="List of AnnotationArea names to include if filtered by annotation area. If omitted, all areas are used.",
-    )
-    parser.add_argument(
-        "--base-network-id",
-        type=str,
-        help="Base network ID (e.g. 'garp25') if filtered by base network"
-    )
-    parser.add_argument(
-        "--skip-image-download",
-        action="store_true",
-        help="If set, will not download images."
-    )
-    parser.add_argument(
-        "--object-prediction-run-id",
-        required=True,
-        help="Run ID for object detection predictions to download from S3."
-    )
-    parser.add_argument(
-        "--threads",
-        type=int,
-        help="Enable threaded image download (specify number of threads)"
-    )
-    args = parser.parse_args()
-    main(
-        annotation_area_ids=args.area_names,
-        object_prediction_run_id=args.object_prediction_run_id,
-        threads=args.threads,
-    )
+    main()

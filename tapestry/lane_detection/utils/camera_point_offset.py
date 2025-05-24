@@ -3,11 +3,11 @@ import geopandas as gpd
 from shapely.geometry import Point
 
 
-def get_camera_point_offset(link_segments, crs_lookup):
-    link_segments_with_offsets = []
+def get_camera_point_offset(segs, crs_lookup):
+    segs_with_offsets = []
 
     for base_network_id, epsg in crs_lookup.items():
-        subset = link_segments[link_segments["base_network_id"] == base_network_id].copy()
+        subset = segs[segs["base_network_id"] == base_network_id].copy()
         if subset.empty:
             continue
 
@@ -43,16 +43,16 @@ def get_camera_point_offset(link_segments, crs_lookup):
                 'dist_camera_ls_end',
             ], errors="ignore"),
             geometry='geom',
-            crs=link_segments.crs
+            crs=segs.crs
         )
 
-        link_segments_with_offsets.append(subset)
+        segs_with_offsets.append(subset)
 
     # Combine results and clean up
-    link_segments_with_offsets = gpd.GeoDataFrame(
-        pd.concat(link_segments_with_offsets),
+    segs_with_offsets = gpd.GeoDataFrame(
+        pd.concat(segs_with_offsets),
         geometry='geom',
-        crs=link_segments.crs
+        crs=segs.crs
     )
 
-    return link_segments_with_offsets
+    return segs_with_offsets
