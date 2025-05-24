@@ -88,7 +88,7 @@ def main():
     parser.add_argument("--run-id", required=True)
     filter_type = parser.add_mutually_exclusive_group(required=True)
     filter_type.add_argument("--base-networks", nargs="+", type=str)
-    filter_type.add_argument("--annotation-areas", nargs="+", type=str)
+    filter_type.add_argument("--annotation-areas", nargs="*", type=str)
     filter_type.add_argument("--annotated-link-segments", action="store_true")
     filter_type.add_argument("--annotated-nodes", action="store_true")
     filter_type.add_argument("--all", action="store_true")
@@ -110,8 +110,9 @@ def main():
         df = db.get_annotated_link_segments(exclude_geom=True)
     elif args.annotated_nodes:
         df = db.get_link_segments_for_annotated_nodes(exclude_geom=True)
-    elif args.annotation_areas:
-        df = db.get_link_segments_in_annotation_areas(area_names=args.annotation_areas, exclude_geom=True)
+    elif args.annotation_areas is not None:
+        area_names = args.annotation_areas if args.annotation_areas else None
+        df = db.get_link_segments_in_annotation_areas(area_names=area_names, exclude_geom=True)
     elif args.base_networks:
         df = db.get_link_segments_by_base_network(args.base_networks, exclude_geom=True)
     else:
