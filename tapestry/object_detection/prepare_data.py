@@ -27,10 +27,10 @@ def prepare_training_data(remap_mode: str, remap_configs: list[Path] | None, min
         remap_configs=remap_configs,
         min_group_size=min_group_size
     )
-    # for image_stub, split in split_map.items():
-    #     img_path = DATA_ROOT / "object_detection" / "images" / split / f"{image_stub}.png"
-    #     img_path.parent.mkdir(parents=True, exist_ok=True)
-    #     download_image(image_stub, dest_image_path=img_path)
+    for image_stub, split in split_map.items():
+        img_path = DATA_ROOT / "object_detection" / "images" / split / f"{image_stub}.png"
+        img_path.parent.mkdir(parents=True, exist_ok=True)
+        download_image(image_stub, dest_image_path=img_path)
     print("✅ Data ready.")
 
     label_dir = DATA_ROOT / "object_detection" / "labels" / "train"
