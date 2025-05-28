@@ -37,22 +37,25 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
     val_results = model.val(data=data_yaml_str, imgsz=imgsz)
 
     class_result = getattr(val_results, "class_result", None)
-    if class_result:
+    if class_result is not None and isinstance(class_result, (list, np.ndarray)):
         class_metrics = []
-        for class_id, (precision, recall, mAP50, mAP50_95) in enumerate(class_result):
-            class_metrics.append({
-                "id": class_id,
-                "label": class_names[class_id] if class_id < len(class_names) else f"class_{class_id}",
-                "precision": precision,
-                "recall": recall,
-                "mAP50": mAP50,
-                "mAP50_95": mAP50_95,
-            })
+        for class_id, row in enumerate(class_result):
+            # Ensure row has the correct shape
+            if isinstance(row, (list, np.ndarray)) and len(row) >= 4:
+                precision, recall, mAP50, mAP50_95 = row[:4]
+                class_metrics.append({
+                    "id": class_id,
+                    "label": class_names[class_id] if class_id < len(class_names) else f"class_{class_id}",
+                    "precision": float(precision),
+                    "recall": float(recall),
+                    "mAP50": float(mAP50),
+                    "mAP50_95": float(mAP50_95),
+                })
         with open(save_dir / "class_metrics.json", "w") as f:
             json.dump(class_metrics, f, indent=2)
-        print("✅ Saved class_metrics.json")
+        print(f"✅ Saved class_metrics.json with {len(class_metrics)} entries")
     else:
-        print("⚠️ No per-class metrics available; skipping class_metrics.json")
+        print("⚠️ No valid per-class metrics available; skipping class_metrics.json")
 
     with open(save_dir / "class_info.json", "w") as f:
         json.dump(
