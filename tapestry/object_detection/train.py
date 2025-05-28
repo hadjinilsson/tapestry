@@ -34,6 +34,10 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
         class_names = data_cfg.get("names", [])
 
     # Save per-class metrics if available
+    print(f"📊 Available metrics: {hasattr(results, 'metrics')}")
+    if hasattr(results, "metrics"):
+        print(f"  - class_result: {hasattr(results.metrics, 'class_result')}")
+        print(f"  - metrics object: {results.metrics}")
     if hasattr(results, "metrics") and hasattr(results.metrics, "class_result"):
         class_metrics = []
         for class_id, (precision, recall, mAP50, mAP50_95) in enumerate(results.metrics.class_result):
