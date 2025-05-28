@@ -19,8 +19,9 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     model = YOLO(model_type)
     data_yaml_path = DATA_ROOT / "object_detection" / "data.yaml"
+    data_yaml_str = str(data_yaml_path.resolve())
     results = model.train(
-        data=str(data_yaml_path.resolve()),
+        data=data_yaml_str,
         epochs=epochs,
         imgsz=imgsz,
         project=str(output_dir.parent),
@@ -33,14 +34,13 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
         data_cfg = yaml.safe_load(f)
         class_names = data_cfg.get("names", [])
 
-    # Save per-class metrics if available
-    print(f"📊 Available metrics: {hasattr(results, 'metrics')}")
-    if hasattr(results, "metrics"):
-        print(f"  - class_result: {hasattr(results.metrics, 'class_result')}")
-        print(f"  - metrics object: {results.metrics}")
-    if hasattr(results, "metrics") and hasattr(results.metrics, "class_result"):
+    val_results = model.val(data=data_yaml_str, imgsz=imgsz)
+
+    # Save class metrics
+    class_result = getattr(val_results.metrics, "class_result", None)
+    if class_result:
         class_metrics = []
-        for class_id, (precision, recall, mAP50, mAP50_95) in enumerate(results.metrics.class_result):
+        for class_id, (precision, recall, mAP50, mAP50_95) in enumerate(class_result):
             class_metrics.append({
                 "id": class_id,
                 "label": class_names[class_id] if class_id < len(class_names) else f"class_{class_id}",
@@ -51,6 +51,9 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
             })
         with open(save_dir / "class_metrics.json", "w") as f:
             json.dump(class_metrics, f, indent=2)
+        print("✅ Saved class_metrics.json")
+    else:
+        print("⚠️ No per-class metrics available; skipping class_metrics.json")
 
     with open(save_dir / "class_info.json", "w") as f:
         json.dump(
