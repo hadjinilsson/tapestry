@@ -36,8 +36,7 @@ def train(model_type: str, epochs: int, imgsz: int, output_dir: Path) -> tuple[s
 
     val_results = model.val(data=data_yaml_str, imgsz=imgsz)
 
-    # Save class metrics
-    class_result = getattr(val_results.metrics, "class_result", None)
+    class_result = getattr(val_results, "class_result", None)
     if class_result:
         class_metrics = []
         for class_id, (precision, recall, mAP50, mAP50_95) in enumerate(class_result):
