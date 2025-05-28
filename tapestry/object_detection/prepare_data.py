@@ -3,44 +3,48 @@ import shutil
 from pathlib import Path
 from tapestry.label_studio.parse_annotations import parse_annotations
 from tapestry.utils.image_fetching import download_image
+from tapestry.utils.config import save_args
 from collections import Counter
 
+
 # ───────────── CONFIG ─────────────
-DATA_ROOT = Path("data")
-MODULE_ROOT = Path("tapestry/object_detection")
+DATA_DIR = Path("data") / "object_detection" / "train"
+MODULE_DIR = Path("tapestry/object_detection")
 counter = Counter()
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ───────────── TRAINING MODE ─────────────
 
 def prepare_data(remap_mode: str, remap_configs: list[Path] | None, min_group_size: int | None):
     print("🧠 Preparing data")
 
-    if (DATA_ROOT / "object_detection" / "images").exists():
-        shutil.rmtree(DATA_ROOT / "object_detection" / "images")
+    if (DATA_DIR/ "images").exists():
+        shutil.rmtree(DATA_DIR / "images")
 
-    if (DATA_ROOT / "object_detection" / "labels").exists():
-        shutil.rmtree(DATA_ROOT / "object_detection" / "labels")
+    if (DATA_DIR / "labels").exists():
+        shutil.rmtree(DATA_DIR / "labels")
 
     split_map = parse_annotations(
-        DATA_ROOT / "object_detection",
+        DATA_DIR,
         remap_mode=remap_mode,
         remap_configs=remap_configs,
         min_group_size=min_group_size
     )
     for image_stub, split in split_map.items():
-        img_path = DATA_ROOT / "object_detection" / "images" / split / f"{image_stub}.png"
+        img_path = DATA_DIR / "images" / split / f"{image_stub}.png"
         img_path.parent.mkdir(parents=True, exist_ok=True)
         download_image(image_stub, dest_image_path=img_path)
     print("✅ Data ready.")
 
-    label_dir = DATA_ROOT / "object_detection" / "labels" / "train"
+    label_dir = DATA_DIR / "labels" / "train"
     for txt_file in label_dir.glob("*.txt"):
         with open(txt_file) as f:
             for line in f:
                 class_id = int(line.strip().split()[0])
                 counter[class_id] += 1
 
-    yaml_path = DATA_ROOT / "object_detection" / "data.yaml"
+    yaml_path = DATA_DIR / "data.yaml"
     with open(yaml_path) as f:
         for line in f:
             if line.startswith("names:"):
@@ -56,8 +60,8 @@ def prepare_data(remap_mode: str, remap_configs: list[Path] | None, min_group_si
         label = label_names[class_id] if class_id < len(label_names) else f"class_{class_id}"
         print(f"  {label:25} → {count}")
 
-# ───────────── ENTRY POINT ─────────────
 
+# ───────────── ENTRY POINT ─────────────
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -81,7 +85,9 @@ def main():
     )
     args = parser.parse_args()
 
-    remap_paths = [MODULE_ROOT / "remap_configs" / f"{name}.json" for name in args.remap_configs]
+    save_args(args, DATA_DIR / "data_config.json")
+
+    remap_paths = [MODULE_DIR / "remap_configs" / f"{name}.json" for name in args.remap_configs]
 
     prepare_data(
         remap_mode=args.remap,
