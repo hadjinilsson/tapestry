@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import warnings
 import logging
 from pathlib import Path
@@ -29,6 +30,11 @@ IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("torch").setLevel(logging.ERROR)
+
+
+class DevNull:
+    def write(self, _): pass
+    def flush(self): pass
 
 
 def run_inference(checkpoint_path, output_dir, base_network, camera_ids, batch_size):
@@ -89,7 +95,11 @@ def main():
     parser.add_argument("--batch-size", type=int, default=10000)
     parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--s3-prefix", default="lane_detection")
+    parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
+
+    if "--quiet" in sys.argv:
+        sys.stderr = DevNull()
 
     output_dir = DATA_DIR / "runs" / args.run_id
     output_dir.mkdir(parents=True, exist_ok=True)
