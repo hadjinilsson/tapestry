@@ -1,5 +1,7 @@
 import argparse
 import os
+import warnings
+import logging
 from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
@@ -25,6 +27,9 @@ DATA_DIR = Path("data") / "lane_detection"
 IMAGE_DIR = DATA_DIR / "images"
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
+warnings.filterwarnings("ignore", category=UserWarning)
+logging.getLogger("torch").setLevel(logging.ERROR)
+
 
 def run_inference(checkpoint_path, output_dir, base_network, camera_ids, batch_size):
     model = LaneDetectionModel.load_from_checkpoint(checkpoint_path)
@@ -38,14 +43,16 @@ def run_inference(checkpoint_path, output_dir, base_network, camera_ids, batch_s
         batch: list[str]
         download_image_batch(batch, IMAGE_DIR)
         dataset = LaneDetectionDataset(data_root=DATA_DIR, mode="predict")
-        loader = DataLoader(dataset, batch_size=1, shuffle=False)
+        loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
 
         trainer = Trainer(
             accelerator="cpu",
             devices=1,
             logger=False,
-            callbacks=[TQDMProgressBar(refresh_rate=1)],
-            log_every_n_steps=1
+            callbacks=[TQDMProgressBar(refresh_rate=20)],
+            enable_model_summary=False,
+            enable_progress_bar=True,
+            log_every_n_steps=50,
         )
 
         predictions = trainer.predict(model, dataloaders=loader, return_predictions=True)
