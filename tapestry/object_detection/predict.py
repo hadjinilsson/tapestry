@@ -80,7 +80,7 @@ def run_inference(model_path: Path, output_dir: Path, base_network: str, camera_
             for img_path in IMAGE_DIR.glob("*.png"):
                 img_path.unlink(missing_ok=True)
 
-    out_path = Path(output_dir) / f"{base_network}.parquet"
+    out_path = output_dir / f"{base_network}.parquet"
     pd.DataFrame(all_preds).to_parquet(out_path, index=False)
     print(f"✅ Saved predictions to {out_path}")
 
@@ -133,7 +133,7 @@ def main():
         grouped[base].append(cp_id)
 
     for base_network, ids in grouped.items():
-        run_inference(checkpoint_path, args.run_id, base_network, ids, args.batch_size)
+        run_inference(checkpoint_path, output_dir, base_network, ids, args.batch_size)
 
     if not args.no_upload:
         s3_key = f"{args.s3_prefix}/{args.run_id}"
