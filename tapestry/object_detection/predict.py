@@ -95,18 +95,18 @@ def main():
         )
 
     if args.annotated_link_segments:
-        df = db.get_annotated_link_segments(exclude_geom=True)
+        segs = db.get_annotated_link_segments(exclude_geom=True)
     elif args.annotated_nodes:
-        df = db.get_link_segments_for_annotated_nodes(exclude_geom=True)
+        segs = db.get_link_segments_for_annotated_nodes(exclude_geom=True)
     elif args.annotation_areas is not None:
         area_names = args.annotation_areas if args.annotation_areas else None
-        df = db.get_link_segments_by_annotation_area(area_names=area_names, exclude_geom=True)
+        segs = db.get_link_segments_by_annotation_area(area_names=area_names, exclude_geom=True)
     elif args.base_networks:
-        df = db.get_link_segments_by_base_network(args.base_networks, exclude_geom=True)
+        segs = db.get_link_segments_by_base_network(args.base_networks, exclude_geom=True)
     else:
-        df = db.get_all_link_segments(exclude_geom=True)
+        segs = db.get_all_link_segments(exclude_geom=True)
 
-    camera_ids = df["camera_point_id"].dropna().unique().tolist()
+    camera_ids = segs["camera_point_id"].dropna().unique().tolist()
 
     grouped = defaultdict(list)
     for cp_id in camera_ids:
