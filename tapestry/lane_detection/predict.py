@@ -88,7 +88,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     save_args(args, output_dir / "predict_config.json")
 
-    checkpoint_path = DATA_DIR / "checkpoints" / args.run_id / "best.ckpt"
+    checkpoint_path = DATA_DIR / "checkpoints" / args.run_id / "best-checkpoint.ckpt"
     if not checkpoint_path.exists():
         print(f"⬇️ Downloading checkpoint for run {args.run_id}...")
         download_dir_from_s3(
