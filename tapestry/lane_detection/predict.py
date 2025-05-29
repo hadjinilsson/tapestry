@@ -61,10 +61,10 @@ def main():
     filter_type.add_argument("--annotation-areas", nargs="*", type=str)
     filter_type.add_argument("--annotated-nodes", action="store_true")
     filter_type.add_argument("--all", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=10000)
+    parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--s3-prefix", default="lane_detection")
-    parser.add_argument("--grid-size", type=int, default=500)
+    parser.add_argument("--grid-size", type=int, default=2500)
     args = parser.parse_args()
 
     output_dir = DATA_DIR / "runs" / args.run_id
