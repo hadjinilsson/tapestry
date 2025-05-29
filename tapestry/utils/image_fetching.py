@@ -71,6 +71,27 @@ def download_image(camera_point_id: str, dest_image_path: Path, dest_json_path: 
             print(f"⚠️  Failed to download JSON for {camera_point_id}: {e}")
 
 
+def download_one(cp_id: str, img_dir: Path):
+    img_path = img_dir / f"{cp_id}.png"
+    if not img_path.exists():
+        download_image(cp_id, dest_image_path=img_path)
+
+
+def download_image_batch(camera_ids: list[str], img_dir: Path, max_workers: int = 10):
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(download_one, cp_id, img_dir) for cp_id in camera_ids]
+        for i, future in enumerate(as_completed(futures), 1):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"⚠️ Failed to download image {camera_ids[i-1]}: {e}")
+
+
+def delete_downloaded_images(img_dir):
+    for img_path in img_dir.glob("*.png"):
+        img_path.unlink(missing_ok=True)
+
+
 def download_images_for_camera_points(camera_point_ids, image_dir: Path, batch_size: int = 100, overwrite=False):
     image_dir.mkdir(parents=True, exist_ok=True)
 

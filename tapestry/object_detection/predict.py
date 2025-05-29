@@ -5,12 +5,11 @@ import pandas as pd
 from dotenv import load_dotenv
 from ultralytics import YOLO
 
-from tapestry.utils.image_fetching import download_image
+from tapestry.utils.image_fetching import download_image_batch, delete_downloaded_images
 from tapestry.utils import db
 from tapestry.utils.s3 import download_dir_from_s3, upload_dir_to_s3
 from tapestry.utils.config import save_args
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 load_dotenv()
@@ -20,23 +19,6 @@ S3_BUCKET_PREDICTIONS = os.getenv("BUCKET_NAME_PREDICTIONS")
 DATA_DIR = Path("data") / "object_detection" / "predict"
 IMAGE_DIR = DATA_DIR / "images"
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ─────────────── DOWNLOAD IMAGES ───────────────
-def download_one(cp_id: str):
-    img_path = IMAGE_DIR / f"{cp_id}.png"
-    if not img_path.exists():
-        download_image(cp_id, dest_image_path=img_path)
-
-
-def download_image_batch(camera_ids: list[str], max_workers: int = 10):
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(download_one, cp_id) for cp_id in camera_ids]
-        for i, future in enumerate(as_completed(futures), 1):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"⚠️ Failed to download image {camera_ids[i-1]}: {e}")
 
 
 # ─────────────── RUN INFERENCE ───────────────
@@ -53,7 +35,7 @@ def run_inference(model_path: Path, output_dir: Path, base_network: str, camera_
         print(f"📦 Processing batch {batch_idx} ({len(batch)} images)...")
 
         # Download batch
-        download_image_batch(batch)
+        download_image_batch(batch, IMAGE_DIR)
         image_paths = [IMAGE_DIR / f"{cp_id}.png" for cp_id in batch if (IMAGE_DIR / f"{cp_id}.png").exists()]
 
         try:
@@ -77,8 +59,7 @@ def run_inference(model_path: Path, output_dir: Path, base_network: str, camera_
                         "height": height_norm,
                     })
         finally:
-            for img_path in IMAGE_DIR.glob("*.png"):
-                img_path.unlink(missing_ok=True)
+            delete_downloaded_images(IMAGE_DIR)
 
     out_path = output_dir / f"{base_network}.parquet"
     pd.DataFrame(all_preds).to_parquet(out_path, index=False)
