@@ -92,7 +92,7 @@ def main():
     if not checkpoint_path.exists():
         print(f"⬇️ Downloading checkpoint for run {args.run_id}...")
         download_dir_from_s3(
-            s3_prefix=f"{args.s3_prefix}/{args.run_id}/weights",
+            s3_prefix=f"{args.s3_prefix}/{args.run_id}",
             local_dir=checkpoint_path.parent,
             bucket=S3_BUCKET_MODELS,
         )
