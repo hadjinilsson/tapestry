@@ -90,6 +90,7 @@ def main():
     else:
         segs = db.get_all_link_segments(exclude_geom=False)
 
+    segs['base_network_id'] = segs.link_segment_id.str.split('_')[0]
     bn_ids = segs["base_network_id"].dropna().unique().tolist()
     pred_seg_ids = set()
 
