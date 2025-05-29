@@ -29,6 +29,7 @@ class LaneDetectionDataset(Dataset):
             max_shift: float = 10.0,
             max_lanes: int = 5,
             max_class_weight: float = 100.0,
+            seg_ids: list | None = None,
     ):
         # Arguments
         self.data_dir = Path(data_root)
@@ -42,6 +43,7 @@ class LaneDetectionDataset(Dataset):
         self.max_shift = max_shift
         self.max_lanes = max_lanes
         self.max_class_weight = max_class_weight
+        self.seg_ids = seg_ids
 
         # Derived
         self.pixels_per_meter = dim_pixels / dim_gsd
@@ -92,7 +94,10 @@ class LaneDetectionDataset(Dataset):
         if self.mode == "predict":
             self.samples = self._build_sample_index(pred_dist)
         else:
-            self.samples = list(df_segs.loc[df_segs.is_training, 'link_segment_id'])
+            df_samples = df_segs[df_segs.is_training]
+            if seg_ids is not None:
+                df_samples = df_samples[df_samples.link_segment_id.isin(seg_ids)]
+            self.samples = list(df_samples['link_segment_id'])
 
     def _build_link_order(self):
         order = {}
@@ -105,7 +110,10 @@ class LaneDetectionDataset(Dataset):
 
     def _build_sample_index(self, spacing: float):
         sample_index = []
-        pred_ids = self.link_segments.index.tolist()
+        sample_segs = self.link_segments
+        if self.seg_ids is not None:
+            sample_segs = sample_segs[sample_segs.index.isin(self.seg_ids)]
+        pred_ids = sample_segs.index.tolist()
         for link_segment_id in pred_ids:
             seg = self.link_segments.loc[link_segment_id]
             seg_len = seg["length_proj"]

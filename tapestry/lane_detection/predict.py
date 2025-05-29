@@ -6,13 +6,15 @@ import warnings
 import logging
 from pathlib import Path
 import pandas as pd
+import geopandas as gpd
+from shapely.geometry import box
 from dotenv import load_dotenv
-from collections import defaultdict
 from tqdm import tqdm
 
 from torch.utils.data import DataLoader
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import TQDMProgressBar
+import torch
 
 from tapestry.utils import db
 from tapestry.utils.s3 import download_dir_from_s3, upload_dir_to_s3
@@ -33,51 +35,23 @@ warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("torch").setLevel(logging.ERROR)
 
 
-def run_inference(checkpoint_path, output_dir, base_network, camera_ids, batch_size):
-    model = LaneDetectionModel.load_from_checkpoint(checkpoint_path)
-    model.eval()
+def generate_grid(bounds, grid_size, crs):
+    minx, miny, maxx, maxy = bounds
+    x_coords = list(range(int(minx), int(maxx), grid_size))
+    y_coords = list(range(int(miny), int(maxy), grid_size))
+    cells = []
+    for x in x_coords:
+        for y in y_coords:
+            geom = box(x, y, x + grid_size, y + grid_size)
+            cells.append(geom)
+    return gpd.GeoDataFrame(geometry=cells, crs=crs)
 
-    all_preds = []
-    batches = [camera_ids[i:i + batch_size] for i in range(0, len(camera_ids), batch_size)]
 
-    for batch_idx, batch in enumerate(tqdm(batches, desc=f"🔍 Inference on {base_network}", unit="batch")):
-        print(f"📦 Processing batch {batch_idx + 1} ({len(batch)} images)...")
-        batch: list[str]
-        download_image_batch(batch, IMAGE_DIR)
-        dataset = LaneDetectionDataset(data_root=DATA_DIR, mode="predict")
-        loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
+def get_within_bounds(df, bounds):
+    minx, miny, maxx, maxy = bounds
+    bbox = box(minx, miny, maxx, maxy)
+    return df[df.geometry.apply(lambda geom: geom.intersects(bbox))]
 
-        trainer = Trainer(
-            accelerator="cpu",
-            devices=1,
-            logger=False,
-            callbacks=[TQDMProgressBar(refresh_rate=20)],
-            enable_model_summary=False,
-            enable_progress_bar=True,
-            log_every_n_steps=50,
-        )
-
-        predictions = trainer.predict(model, dataloaders=loader, return_predictions=True)
-        all_preds.extend(predictions)
-        delete_downloaded_images(IMAGE_DIR)
-
-    df = pd.DataFrame([
-        {
-            "camera_point_id": pred["numerical_id"],
-            "pred_forward": int(pred["predicted_lanes"][0]),
-            "pred_backward": int(pred["predicted_lanes"][1]),
-            "logit_forward": float(pred["predicted_logits"][0]),
-            "logit_backward": float(pred["predicted_logits"][1]),
-            "label_forward": int(pred["label"][0]),
-            "label_backward": int(pred["label"][1]),
-            "has_label": bool(pred["has_label"]),
-        }
-        for pred in all_preds
-    ])
-
-    out_path = output_dir / f"{base_network}.parquet"
-    df.to_parquet(out_path, index=False)
-    print(f"✅ Saved predictions to {out_path}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -85,12 +59,12 @@ def main():
     filter_type = parser.add_mutually_exclusive_group(required=True)
     filter_type.add_argument("--base-networks", nargs="+", type=str)
     filter_type.add_argument("--annotation-areas", nargs="*", type=str)
-    filter_type.add_argument("--annotated-link-segments", action="store_true")
     filter_type.add_argument("--annotated-nodes", action="store_true")
     filter_type.add_argument("--all", action="store_true")
     parser.add_argument("--batch-size", type=int, default=10000)
     parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--s3-prefix", default="lane_detection")
+    parser.add_argument("--grid-size", type=int, default=500)
     args = parser.parse_args()
 
     output_dir = DATA_DIR / "runs" / args.run_id
@@ -106,30 +80,97 @@ def main():
             bucket=S3_BUCKET_MODELS,
         )
 
-    if args.annotated_link_segments:
-        df = db.get_annotated_link_segments(exclude_geom=True)
-    elif args.annotated_nodes:
-        df = db.get_link_segments_for_annotated_nodes(exclude_geom=True)
+    if args.annotated_nodes:
+        segs = db.get_link_segments_for_annotated_nodes(exclude_geom=False)
     elif args.annotation_areas is not None:
         area_names = args.annotation_areas if args.annotation_areas else None
-        df = db.get_link_segments_by_annotation_area(area_names=area_names, exclude_geom=True)
+        segs = db.get_link_segments_by_annotation_area(area_names=area_names, exclude_geom=False)
     elif args.base_networks:
-        df = db.get_link_segments_by_base_network(args.base_networks, exclude_geom=True)
+        segs = db.get_link_segments_by_base_network(args.base_networks, exclude_geom=False)
     else:
-        df = db.get_all_link_segments(exclude_geom=True)
+        segs = db.get_all_link_segments(exclude_geom=False)
 
-    camera_ids = df["camera_point_id"].dropna().unique().tolist()
-    grouped = defaultdict(list)
-    for cp_id in camera_ids:
-        base = cp_id.split("_")[0]
-        grouped[base].append(cp_id)
+    bn_ids = segs["base_network_id"].dropna().unique().tolist()
+    pred_seg_ids = set()
 
-    for base_network, ids in grouped.items():
-        run_inference(checkpoint_path, output_dir, base_network, ids, args.batch_size)
+    for bn_id in bn_ids:
+        segs_bn = segs[segs["base_network_id"] == bn_id]
+        bn_bbox = segs_bn.total_bounds  # [minx, miny, maxx, maxy]
+        bn_cells = generate_grid(bn_bbox, args.grid_size, crs=segs_bn.crs)
+        print(f"📱 {bn_id}: {len(bn_cells)} grid cells")
+
+        bn_preds = []
+
+        for bn_cell in tqdm(bn_cells.geometry, desc=f"🔍 Inference on {bn_id}", unit="cell"):
+            segs_not_pred = segs_bn[~segs_bn["link_segment_id"].isin(pred_seg_ids)]
+            if segs_not_pred.empty:
+                continue
+
+            segs_to_pred = get_within_bounds(segs_not_pred, bn_cell.bounds)
+            if segs_to_pred.empty:
+                continue
+
+            bn_cell_buff = bn_cell.buffer(100)
+            segs_in_cell = get_within_bounds(segs_bn, bn_cell_buff.bounds)
+            cap_ids = segs_in_cell['camera_point_id'].unique()
+            if not cap_ids.any():
+                continue
+
+            download_image_batch(cap_ids, IMAGE_DIR)
+
+            ds = LaneDetectionDataset(data_root=DATA_DIR, mode="predict", seg_ids=list(segs_to_pred.link_segment_id))
+
+            idx_to_keys = {
+                i: s for i, s in enumerate(ds.samples)
+            }
+
+            loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+
+            trainer = Trainer(
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                devices=1,
+                logger=False,
+                callbacks=[TQDMProgressBar(refresh_rate=20)],
+                enable_model_summary=False,
+                enable_progress_bar=True,
+                log_every_n_steps=50,
+            )
+
+            model = LaneDetectionModel.load_from_checkpoint(checkpoint_path)
+            model.eval()
+            seg_preds = trainer.predict(model, dataloaders=loader, return_predictions=True)
+
+            delete_downloaded_images(IMAGE_DIR)
+
+            for seg_pred in seg_preds:
+                key = idx_to_keys.get(int(seg_pred["numerical_id"]))
+                if key is None:
+                    continue
+                seg, dist = key
+                bn_preds.append({
+                    "link_segment_id": seg,
+                    "distance": dist,
+                    "pred_forward": int(seg_pred["predicted_lanes"][0]),
+                    "pred_backward": int(seg_pred["predicted_lanes"][1]),
+                    "logit_forward": float(seg_pred["predicted_logits"][0]),
+                    "logit_backward": float(seg_pred["predicted_logits"][1]),
+                    "label_forward": int(seg_pred["label"][0]),
+                    "label_backward": int(seg_pred["label"][1]),
+                    "has_label": bool(seg_pred["has_label"]),
+                })
+
+            pred_seg_ids.update(segs_to_pred["link_segment_id"].tolist())
+
+        if bn_preds:
+            bn_preds_df = pd.DataFrame(bn_preds)
+            out_path = output_dir / f"{bn_id}.parquet"
+            bn_preds_df.to_parquet(out_path, index=False)
+            print(f"✅ Saved predictions for {bn_id} to {out_path}")
 
     if not args.no_upload:
         s3_key = f"{args.s3_prefix}/{args.run_id}"
         upload_dir_to_s3(output_dir, s3_key, S3_BUCKET_PREDICTIONS)
+
 
 if __name__ == "__main__":
     main()
