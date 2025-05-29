@@ -80,7 +80,7 @@ def run_inference(model_path: Path, output_dir: Path, base_network: str, camera_
             for img_path in IMAGE_DIR.glob("*.png"):
                 img_path.unlink(missing_ok=True)
 
-    out_path = output_dir / f"{base_network}.parquet"
+    out_path = Path(output_dir) / f"{base_network}.parquet"
     pd.DataFrame(all_preds).to_parquet(out_path, index=False)
     print(f"✅ Saved predictions to {out_path}")
 
