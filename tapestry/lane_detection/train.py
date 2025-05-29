@@ -1,8 +1,10 @@
 import argparse
 import os
+import shutil
 from datetime import datetime
 from dotenv import load_dotenv
 from tapestry.utils.s3 import upload_dir_to_s3
+from tapestry.utils.config import save_args
 
 import torch
 from pytorch_lightning import Trainer
@@ -19,7 +21,8 @@ load_dotenv()
 S3_BUCKET = os.getenv("BUCKET_NAME_MODELS")
 
 # ---- Settings ----
-DATA_ROOT = Path("data")
+DATA_DIR = Path("data") / "lane_detection"
+
 
 def train(
         batch_size:int = 16,
@@ -27,13 +30,14 @@ def train(
         val_split: float = 0.2,
         seed: int = 42,
         max_epochs: int = 50,
+        train_config: dict | None = None,
     ):
 
     torch.manual_seed(seed)
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # ---- Load dataset ----
-    full_dataset = LaneDetectionDataset(data_root=DATA_ROOT, mode="train")
+    full_dataset = LaneDetectionDataset(data_root=DATA_DIR, mode="train")
     val_size = int(len(full_dataset) * val_split)
     train_size = len(full_dataset) - val_size
     train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
@@ -52,6 +56,9 @@ def train(
         lr=1e-3,
         dice_weight=0.5,
         run_id=run_id,
+        data_config=full_dataset.data_config,
+        obj_pred_config=full_dataset.obj_pred_config,
+        train_config=train_config,
     )
 
     # ---- Data module ----
@@ -63,7 +70,7 @@ def train(
     )
 
     # ---- Logging ----
-    tb_logger = TensorBoardLogger("logs", name="lane_detection", version=run_id)
+    tb_logger = TensorBoardLogger(DATA_DIR / "logs", name="lane_detection", version=run_id)
 
     # ---- Callbacks ----
     checkpoint_cb = ModelCheckpoint(
@@ -88,7 +95,9 @@ def train(
     # ---- Train ----
     trainer.fit(model, datamodule=data_module)
 
-    return run_id, tb_logger.log_dir
+    run_dir = Path(tb_logger.log_dir)
+
+    return run_id, run_dir
 
 
 def main():
@@ -108,8 +117,13 @@ def main():
         args.val_split,
         args.seed,
         args.max_epochs,
+        vars(args),
     )
     print(f"🚀 Training complete: Run ID = {run_id}")
+
+    shutil.copy(DATA_DIR / "data_config.json", run_dir)
+    shutil.copy(DATA_DIR / "object_predictions" / "object_prediction_config.json", run_dir)
+    save_args(args, run_dir / "train_config.json")
 
     if not args.no_upload:
         print("☁️ Uploading run to S3...")

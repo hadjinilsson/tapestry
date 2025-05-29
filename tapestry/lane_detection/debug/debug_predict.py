@@ -10,12 +10,12 @@ from tapestry.lane_detection.dataset import LaneDetectionDataset
 from tapestry.lane_detection.model import LaneDetectionModel
 
 # ---- Settings ----
-data_root = Path('data') # <-- change this to your local test path
+data_dir = Path('data') / "lane_detection" # <-- change this to your local test path
 max_debug_samples = 10
 batch_size = 1
 
 # ---- Load dataset ----
-full_dataset = LaneDetectionDataset(data_root, mode="train")
+full_dataset = LaneDetectionDataset(data_dir, mode="train")
 debug_subset = torch.utils.data.Subset(full_dataset, list(range(min(max_debug_samples, len(full_dataset)))))
 
 # ---- Compute stats ----
@@ -30,7 +30,9 @@ model = LaneDetectionModel(
     obj_mean=stats["object_pred_means"].values,
     obj_std=stats["obj_score_stds"].values,
     lr=1e-3,
-    dice_weight=0.5
+    dice_weight=0.5,
+    data_config=full_dataset.data_config,
+    obj_pred_config=full_dataset.obj_pred_config,
 )
 
 # ---- Dataloader ----

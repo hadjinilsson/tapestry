@@ -33,6 +33,9 @@ class LaneDetectionModel(pl.LightningModule):
         dice_weight=0.5,
         freeze_resnet_blocks=True,
         run_id = None,
+        data_config = None,
+        obj_pred_config = None,
+        train_config = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -83,9 +86,13 @@ class LaneDetectionModel(pl.LightningModule):
             nn.Linear(hidden_dim, 2 * self.num_lane_classes)
         )
 
-        self.val_accuracy = Accuracy(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
-        self.val_recall = Recall(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
-        self.val_f1 = F1Score(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_accuracy_fwd = Accuracy(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_recall_fwd = Recall(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_f1_fwd = F1Score(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+
+        self.val_accuracy_bwd = Accuracy(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_recall_bwd = Recall(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
+        self.val_f1_bwd = F1Score(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
 
     def forward(self, image, object_scores, lat_neighbours):
         object_scores = (object_scores - self.obj_mean[:, None]) / self.obj_std[:, None]
@@ -118,12 +125,12 @@ class LaneDetectionModel(pl.LightningModule):
         targets = batch["sections"].argmax(dim=-1)
         loss = self.compute_loss(logits, targets)
 
-        acc_fwd = self.val_accuracy(logits[:, 0], targets[:, 0])
-        acc_bwd = self.val_accuracy(logits[:, 1], targets[:, 1])
-        recall_fwd = self.val_recall(logits[:, 0], targets[:, 0])
-        recall_bwd = self.val_recall(logits[:, 1], targets[:, 1])
-        f1_fwd = self.val_f1(logits[:, 0], targets[:, 0])
-        f1_bwd = self.val_f1(logits[:, 1], targets[:, 1])
+        acc_fwd = self.val_accuracy_fwd(logits[:, 0], targets[:, 0])
+        acc_bwd = self.val_accuracy_bwd(logits[:, 1], targets[:, 1])
+        recall_fwd = self.val_recall_fwd(logits[:, 0], targets[:, 0])
+        recall_bwd = self.val_recall_bwd(logits[:, 1], targets[:, 1])
+        f1_fwd = self.val_f1_fwd(logits[:, 0], targets[:, 0])
+        f1_bwd = self.val_f1_bwd(logits[:, 1], targets[:, 1])
 
         self.log("val_loss", loss, prog_bar=True)
         self.log("val_acc_forward", acc_fwd, prog_bar=True)
@@ -136,11 +143,23 @@ class LaneDetectionModel(pl.LightningModule):
         return loss
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"])
-        preds = torch.argmax(logits, dim=-1)  # shape: (batch, 2)
+        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"])  # (B, 2, C)
+        preds = torch.argmax(logits, dim=-1)  # (B, 2)
+        pred_logits = torch.gather(logits, dim=2, index=preds.unsqueeze(-1)).squeeze(-1)  # (B, 2)
+
+        if "label" in batch and "has_label" in batch:
+            labels = torch.argmax(batch["label"], dim=-1)  # (B, 2)
+            has_label = batch["has_label"]  # (B,)
+        else:
+            labels = torch.zeros_like(preds)
+            has_label = torch.zeros(preds.size(0), dtype=torch.bool)
+
         return {
             "numerical_id": batch["numerical_id"],
-            "predicted_lanes": preds
+            "predicted_lanes": preds,
+            "predicted_logits": pred_logits,
+            "label": labels,
+            "has_label": has_label
         }
 
     def configure_optimizers(self):

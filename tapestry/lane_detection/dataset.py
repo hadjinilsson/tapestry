@@ -3,10 +3,11 @@ from torch.utils.data import Dataset
 import pandas as pd
 from shapely.geometry import LineString, Point
 from shapely.affinity import rotate
-from shapely import wkb, distance, centroid
+from shapely import wkb, distance
 from pathlib import Path
 from PIL import Image
 import random
+import json
 import numpy as np
 import torchvision.transforms.functional as TF
 import torchvision.transforms as T
@@ -23,14 +24,14 @@ class LaneDetectionDataset(Dataset):
             dim_bins: float = 1.0,
             lat_coverage: float = 35.0,
             lon_coverage: float = 25.0,
-            infer_dist: float = 1.0,
+            pred_dist: float = 1.0,
             max_extra_image: float = 10.0,
             max_shift: float = 10.0,
             max_lanes: int = 5,
             max_class_weight: float = 100.0,
     ):
         # Arguments
-        self.data_root = Path(data_root)
+        self.data_dir = Path(data_root)
         self.mode = mode
         self.dim_pixels = dim_pixels
         self.dim_gsd = dim_gsd
@@ -48,9 +49,16 @@ class LaneDetectionDataset(Dataset):
         self.num_bins = int(round(dim_gsd / dim_bins))
 
         # Directories
-        self.geometry_dir = self.data_root / "lane_detection" / "geometry"
-        self.image_dir = self.data_root / "lane_detection" / "images"
-        self.obj_preds_dir = self.data_root / "lane_detection" / "predictions"
+        self.geometry_dir = self.data_dir / "geometry"
+        self.image_dir = self.data_dir / "images"
+        self.obj_preds_dir = self.data_dir / "object_predictions"
+
+        # Data config
+        config_path = self.data_dir / "data_config.json"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Missing data_prediction_config.json in {self.data_dir}")
+        with open(config_path) as f:
+            self.data_config = json.load(f)
 
         # Link segments
         df_segs = pd.read_parquet(self.geometry_dir / "link_segments_projected.parquet")
@@ -58,9 +66,16 @@ class LaneDetectionDataset(Dataset):
         self.link_segments = df_segs.set_index("link_segment_id")
 
         # Sections
-        df_sections = pd.read_parquet(self.geometry_dir / "sections_projected.parquet")
-        df_sections["geom_proj"] = df_sections["geom_proj"].apply(wkb.loads)
-        self.sections = df_sections
+        sections_path = self.geometry_dir / "sections_projected.parquet"
+        if sections_path.exists():
+            df_secs = pd.read_parquet(sections_path)
+            df_secs["geom_proj"] = df_secs["geom_proj"].apply(wkb.loads)
+            self.sections = df_secs
+            self.has_labels = True
+        else:
+            print("⚠️ No sections file found — must run in label-free prediction mode.")
+            self.sections = None
+            self.has_labels = False
 
         # Lateral neighbours
         self.lat_neighbours = pd.read_parquet(self.geometry_dir / "neighbours.parquet")
@@ -68,14 +83,14 @@ class LaneDetectionDataset(Dataset):
         self.order_vu = pd.read_parquet(self.geometry_dir / "segment_order_vu.parquet")
 
         # Object predictions
-        self.obj_predictions, self.num_obj_pred_classes = self._load_all_obj_preds()
+        self.obj_predictions, self.num_obj_pred_classes, self.obj_pred_config = self._load_all_obj_preds()
 
         # Build link_id to ordered segments map
         self.link_order = self._build_link_order()
 
         # Build index of samples (link_segment_id, geometry length)
-        if self.mode == "inference":
-            self.samples = self._build_sample_index(infer_dist)
+        if self.mode == "predict":
+            self.samples = self._build_sample_index(pred_dist)
         else:
             self.samples = list(df_segs.loc[df_segs.is_training, 'link_segment_id'])
 
@@ -90,8 +105,8 @@ class LaneDetectionDataset(Dataset):
 
     def _build_sample_index(self, spacing: float):
         sample_index = []
-        infer_ids = self.link_segments.index.tolist()
-        for link_segment_id in infer_ids:
+        pred_ids = self.link_segments.index.tolist()
+        for link_segment_id in pred_ids:
             seg = self.link_segments.loc[link_segment_id]
             seg_len = seg["length_proj"]
             num_samples = max(int(seg_len // spacing), 1)
@@ -101,22 +116,53 @@ class LaneDetectionDataset(Dataset):
         return sample_index
 
     def _load_all_obj_preds(self):
+        """
+        Load combined predictions and full class remapping config.
+        Ensure all training camera_point_ids are present in the prediction dict.
+        """
         obj_preds = {}
+        predictions_path = self.obj_preds_dir / "predictions.parquet"
+        config_path = self.obj_preds_dir / "object_prediction_config.json"
+
+        if not predictions_path.exists():
+            raise FileNotFoundError(f"Missing predictions.parquet in {self.obj_preds_dir}")
+        if not config_path.exists():
+            raise FileNotFoundError(f"Missing object_prediction_config.json in {self.obj_preds_dir}")
+
+        # Load class mapping config
+        with open(config_path) as f:
+            obj_pred_config = json.load(f)
+
+        # Build remapped class ID set
         all_labels = set()
+        for run_remap in obj_pred_config.values():
+            for entry in run_remap.values():
+                all_labels.add(entry["remapped_id"])
 
-        for path in self.obj_preds_dir.glob("*.parquet"):
-            df = pd.read_parquet(path)
-            for cam_id, group in df.groupby("camera_point_id"):
-                obj_preds[cam_id] = group
-                all_labels.update(group["class"].unique())
+        # Load actual predictions
+        df = pd.read_parquet(predictions_path)
+        for cam_id, group in df.groupby("camera_point_id"):
+            obj_preds[cam_id] = group
 
-        return obj_preds, len(all_labels)
+        # Ensure all training camera point IDs are present
+        expected_ids = self.link_segments[self.link_segments["is_training"]]["camera_point_id"].dropna().unique()
+        empty_df = pd.DataFrame(columns=df.columns, dtype=float)
+        num_empty = 0
+        for cam_id in expected_ids:
+            if cam_id not in obj_preds:
+                obj_preds[cam_id] = empty_df.copy()
+                num_empty += 1
+
+        percent_empty = int(num_empty / len(expected_ids) * 100)
+        print(f'{num_empty} ({percent_empty}%) link segments without object predictions')
+
+        return obj_preds, len(all_labels), obj_pred_config
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx, fast=False):
-        if self.mode == "inference":
+        if self.mode == "predict":
             seg_id, distance_along = self.samples[idx]
             seg = self.link_segments.loc[seg_id]
         else:
@@ -135,7 +181,11 @@ class LaneDetectionDataset(Dataset):
         cross_section = self.get_cross_section(seg_geom, distance_along, sample_point)
 
         #  Get labels
-        sections = self.get_sections(seg_id, sample_point, cross_section)
+        if self.has_labels:
+            sections = self.get_sections(seg_id, sample_point, cross_section)
+        else:
+            sections = None
+        has_label = sections is not None
 
         # Get neighbours
         lat_neighbours = self.get_lat_neighbours(seg_id, sample_point, cross_section) if not fast else None
@@ -197,12 +247,16 @@ class LaneDetectionDataset(Dataset):
         img = TF.resize(img, size=[self.dim_pixels, self.dim_pixels]) if not fast else None
         obj_scores = self.format_object_predictions(obj_preds)
         lat_neighbours = self.format_lat_neighbours(lat_neighbours) if not fast else None
-        sections = self.format_sections(sections)
+        if has_label: sections = self.format_sections(sections)
+
 
         # To tensor
         obj_scores =  torch.tensor(obj_scores.values, dtype=torch.float32)
         lat_neighbours =  torch.tensor(lat_neighbours, dtype=torch.float32) if not fast else None
-        sections = torch.tensor(sections, dtype=torch.float32)
+        if has_label:
+            sections = torch.tensor(sections, dtype=torch.float32)
+        else:
+            sections = torch.zeros((2, self.max_lanes + 1), dtype=torch.int32)
 
         #  Check for nans
         to_check = [obj_scores, sections] if fast else [img, obj_scores, lat_neighbours, sections]
@@ -217,6 +271,7 @@ class LaneDetectionDataset(Dataset):
             "sections": sections,
             "shift": shift,
             "flip": flip,
+            "has_label": has_label,
         }
 
     def get_cross_section(self, seg_geom, distance_along, sample_point):
@@ -252,6 +307,9 @@ class LaneDetectionDataset(Dataset):
         return df
 
     def get_sections(self, seg_id, sample_point, cross_section):
+
+        if seg_id not in self.link_segments.index:
+            return None
 
         seg = self.link_segments.loc[seg_id]
         seg_geom = seg['geom_proj']
