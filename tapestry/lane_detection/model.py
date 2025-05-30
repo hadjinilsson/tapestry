@@ -154,13 +154,19 @@ class LaneDetectionModel(pl.LightningModule):
             labels = torch.zeros_like(preds)
             has_label = torch.zeros(preds.size(0), dtype=torch.bool)
 
-        return {
-            "numerical_id": batch["numerical_id"],
-            "predicted_lanes": preds,
-            "predicted_logits": pred_logits,
-            "label": labels,
-            "has_label": has_label
-        }
+        batch_size = preds.shape[0]
+        results = []
+
+        for i in range(batch_size):
+            results.append({
+                "numerical_id": batch["numerical_id"][i],  # scalar tensor
+                "predicted_lanes": preds[i],  # tensor of shape (2,)
+                "predicted_logits": pred_logits[i],  # tensor of shape (2,)
+                "label": labels[i],  # tensor of shape (2,)
+                "has_label": has_label[i]  # tensor of shape ()
+            })
+
+        return results
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
