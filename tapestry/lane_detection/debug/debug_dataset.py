@@ -51,17 +51,17 @@ def show_sample_with_predictions(sample):
     plt.show()
 
 data_dir = Path('data') / "lane_detection"
-train_ds = LaneDetectionDataset(data_root=data_dir, mode="train")
+# train_ds = LaneDetectionDataset(data_root=data_dir, mode="train")
 
 # pred_ds = LaneDetectionDataset(data_root=data_dir, mode="predict")
 
-validate_shapes(train_ds)
+# validate_shapes(train_ds)
 
-stats = train_ds.compute_statistics()
+# stats = train_ds.compute_statistics()
 
 # sample = train_ds[5]
-for i in range(100):
-    sample = train_ds[np.random.randint(len(train_ds))]
+# for i in range(100):
+#     sample = train_ds[np.random.randint(len(train_ds))]
 # show_sample_with_predictions(sample)
 
 # sample = pred_ds[np.random.randint(len(pred_ds))]

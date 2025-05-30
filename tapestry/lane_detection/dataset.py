@@ -84,20 +84,21 @@ class LaneDetectionDataset(Dataset):
         self.order_uv = pd.read_parquet(self.geometry_dir / "segment_order_uv.parquet")
         self.order_vu = pd.read_parquet(self.geometry_dir / "segment_order_vu.parquet")
 
-        # Object predictions
-        self.obj_predictions, self.num_obj_pred_classes, self.obj_pred_config = self._load_all_obj_preds()
-
         # Build link_id to ordered segments map
         self.link_order = self._build_link_order()
 
         # Build index of samples (link_segment_id, geometry length)
         if self.mode == "predict":
-            self.samples = self._build_sample_index(pred_dist)
+            self.samples, self.seg_ids = self._build_sample_index(pred_dist)
         else:
             df_samples = df_segs[df_segs.is_training]
             if seg_ids is not None:
                 df_samples = df_samples[df_samples.link_segment_id.isin(seg_ids)]
             self.samples = list(df_samples['link_segment_id'])
+            self.seg_ids = self.samples
+
+        # Object predictions
+        self.obj_predictions, self.num_obj_pred_classes, self.obj_pred_config = self._load_all_obj_preds()
 
     def _build_link_order(self):
         order = {}
@@ -113,15 +114,15 @@ class LaneDetectionDataset(Dataset):
         sample_segs = self.link_segments
         if self.seg_ids is not None:
             sample_segs = sample_segs[sample_segs.index.isin(self.seg_ids)]
-        pred_ids = sample_segs.index.tolist()
-        for link_segment_id in pred_ids:
-            seg = self.link_segments.loc[link_segment_id]
+        seg_ids = sample_segs.index.tolist()
+        for seg_id in seg_ids:
+            seg = self.link_segments.loc[seg_id]
             seg_len = seg["length_proj"]
             num_samples = max(int(seg_len // spacing), 1)
             ds = np.linspace(0, seg_len, num=num_samples, endpoint=False)
             for d in ds:
-                sample_index.append((link_segment_id, d))
-        return sample_index
+                sample_index.append((seg_id, d))
+        return sample_index, seg_ids
 
     def _load_all_obj_preds(self):
         """
@@ -149,19 +150,20 @@ class LaneDetectionDataset(Dataset):
 
         # Load actual predictions
         df = pd.read_parquet(predictions_path)
-        for cam_id, group in df.groupby("camera_point_id"):
-            obj_preds[cam_id] = group
+        for cap_id, group in df.groupby("camera_point_id"):
+            obj_preds[cap_id] = group
 
         # Ensure all training camera point IDs are present
-        expected_ids = self.link_segments[self.link_segments["is_training"]]["camera_point_id"].dropna().unique()
+        segs = self.link_segments
+        expected_cap_ids = segs[segs.link_segment_id.isin(self.seg_ids)]["camera_point_id"].dropna().unique()
         empty_df = pd.DataFrame(columns=df.columns, dtype=float)
         num_empty = 0
-        for cam_id in expected_ids:
-            if cam_id not in obj_preds:
-                obj_preds[cam_id] = empty_df.copy()
+        for cap_id in expected_cap_ids:
+            if cap_id not in obj_preds:
+                obj_preds[cap_id] = empty_df.copy()
                 num_empty += 1
 
-        percent_empty = int(num_empty / len(expected_ids) * 100)
+        percent_empty = int(num_empty / len(expected_cap_ids) * 100)
         print(f'{num_empty} ({percent_empty}%) link segments without object predictions')
 
         return obj_preds, len(all_labels), obj_pred_config
