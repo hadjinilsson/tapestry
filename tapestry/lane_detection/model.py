@@ -159,11 +159,11 @@ class LaneDetectionModel(pl.LightningModule):
 
         for i in range(batch_size):
             results.append({
-                "numerical_id": batch["numerical_id"][i],  # scalar tensor
-                "predicted_lanes": preds[i],  # tensor of shape (2,)
-                "predicted_logits": pred_logits[i],  # tensor of shape (2,)
-                "label": labels[i],  # tensor of shape (2,)
-                "has_label": has_label[i]  # tensor of shape ()
+                "numerical_id": batch["numerical_id"][i],
+                "predicted_lanes": preds[i],
+                "predicted_logits": pred_logits[i],
+                "label": labels[i],
+                "has_label": has_label[i],
             })
 
         return results

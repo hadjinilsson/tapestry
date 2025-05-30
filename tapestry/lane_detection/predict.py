@@ -139,26 +139,28 @@ def main():
 
             model = LaneDetectionModel.load_from_checkpoint(checkpoint_path)
             model.eval()
-            seg_preds = trainer.predict(model, dataloaders=loader, return_predictions=True)
+            batches = trainer.predict(model, dataloaders=loader, return_predictions=True)
 
             delete_downloaded_images(IMAGE_DIR)
 
-            for seg_pred in seg_preds:
-                key = idx_to_keys.get(int(seg_pred["numerical_id"]))
-                if key is None:
-                    continue
-                seg, dist = key
-                bn_preds.append({
-                    "link_segment_id": seg,
-                    "distance": dist,
-                    "pred_forward": int(seg_pred["predicted_lanes"][0]),
-                    "pred_backward": int(seg_pred["predicted_lanes"][1]),
-                    "logit_forward": float(seg_pred["predicted_logits"][0]),
-                    "logit_backward": float(seg_pred["predicted_logits"][1]),
-                    "label_forward": int(seg_pred["label"][0]),
-                    "label_backward": int(seg_pred["label"][1]),
-                    "has_label": bool(seg_pred["has_label"]),
-                })
+            for batch in batches:
+                for pred in batch:
+                    numerical_id = int(pred["numerical_id"])
+                    key = idx_to_keys.get(numerical_id)
+                    if key is None:
+                        continue
+                    seg_id, dist = key
+                    bn_preds.append({
+                        "link_segment_id": seg_id,
+                        "distance": dist,
+                        "pred_forward": int(pred["predicted_lanes"][0]),
+                        "pred_backward": int(pred["predicted_lanes"][1]),
+                        "logit_forward": float(pred["predicted_logits"][0]),
+                        "logit_backward": float(pred["predicted_logits"][1]),
+                        "label_forward": int(pred["label"][0]),
+                        "label_backward": int(pred["label"][1]),
+                        "has_label": bool(pred["has_label"]),
+                    })
 
             pred_seg_ids.update(segs_to_pred["link_segment_id"].tolist())
 
