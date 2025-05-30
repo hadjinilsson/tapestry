@@ -144,7 +144,7 @@ def main():
             delete_downloaded_images(IMAGE_DIR)
 
             for seg_pred in seg_preds:
-                key = idx_to_keys.get(int(seg_pred["numerical_id"]))
+                key = idx_to_keys.get(int(seg_pred["numerical_id"].item()))
                 if key is None:
                     continue
                 seg, dist = key
