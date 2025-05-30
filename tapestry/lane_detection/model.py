@@ -144,11 +144,13 @@ class LaneDetectionModel(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"])  # (B, 2, C)
-        preds = torch.argmax(logits, dim=-1)  # (B, 2)
-        pred_logits = torch.gather(logits, dim=2, index=preds.unsqueeze(-1)).squeeze(-1)  # (B, 2)
+        probs = F.softmax(logits, dim=-1)
 
-        if "label" in batch and "has_label" in batch:
-            labels = torch.argmax(batch["label"], dim=-1)  # (B, 2)
+        preds = torch.argmax(probs, dim=-1)  # (B, 2)
+        pred_probs = torch.gather(probs, dim=2, index=preds.unsqueeze(-1)).squeeze(-1)  # (B, 2)
+
+        if "sections" in batch and "has_label" in batch:
+            labels = torch.argmax(batch["sections"], dim=-1)  # (B, 2)
             has_label = batch["has_label"]  # (B,)
         else:
             labels = torch.zeros_like(preds)
@@ -161,7 +163,7 @@ class LaneDetectionModel(pl.LightningModule):
             results.append({
                 "numerical_id": batch["numerical_id"][i],
                 "predicted_lanes": preds[i],
-                "predicted_logits": pred_logits[i],
+                "predicted_probs": pred_probs[i],
                 "label": labels[i],
                 "has_label": has_label[i],
             })
