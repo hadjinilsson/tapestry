@@ -155,7 +155,7 @@ class LaneDetectionDataset(Dataset):
 
         # Ensure all training camera point IDs are present
         segs = self.link_segments
-        expected_cap_ids = segs[segs.link_segment_id.isin(self.seg_ids)]["camera_point_id"].dropna().unique()
+        expected_cap_ids = segs[segs.index.isin(self.seg_ids)]["camera_point_id"].dropna().unique()
         empty_df = pd.DataFrame(columns=df.columns, dtype=float)
         num_empty = 0
         for cap_id in expected_cap_ids:
