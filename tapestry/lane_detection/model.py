@@ -149,6 +149,9 @@ class LaneDetectionModel(pl.LightningModule):
         preds = torch.argmax(probs, dim=-1)  # (B, 2)
         pred_probs = torch.gather(probs, dim=2, index=preds.unsqueeze(-1)).squeeze(-1)  # (B, 2)
 
+        entropy = -(probs * torch.log(probs.clamp(min=1e-8))).sum(dim=-1)
+        confidence = torch.max(probs, dim=-1).values
+
         if "sections" in batch and "has_label" in batch:
             labels = torch.argmax(batch["sections"], dim=-1)  # (B, 2)
             has_label = batch["has_label"]  # (B,)
@@ -162,8 +165,14 @@ class LaneDetectionModel(pl.LightningModule):
         for i in range(batch_size):
             results.append({
                 "numerical_id": batch["numerical_id"][i],
+                "logits_forward": logits[i, 0].detach().cpu().tolist(),
+                "logits_backward": logits[i, 1].detach().cpu().tolist(),
                 "predicted_lanes": preds[i],
                 "predicted_probs": pred_probs[i],
+                "entropy_forward": float(entropy[i, 0].detach().cpu()),
+                "entropy_backward": float(entropy[i, 1].detach().cpu()),
+                "conf_forward": float(confidence[i, 0].detach().cpu()),
+                "conf_backward": float(confidence[i, 1].detach().cpu()),
                 "label": labels[i],
                 "has_label": has_label[i],
             })
