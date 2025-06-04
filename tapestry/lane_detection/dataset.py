@@ -19,6 +19,7 @@ class LaneDetectionDataset(Dataset):
             self,
             data_root: Path,
             mode: str = "train",
+            use_prior_preds = False,
             dim_pixels: int = 256,
             dim_gsd: float = 50.0,
             dim_bins: float = 1.0,
@@ -34,6 +35,7 @@ class LaneDetectionDataset(Dataset):
         # Arguments
         self.data_dir = Path(data_root)
         self.mode = mode
+        self.use_prior_preds = use_prior_preds
         self.dim_pixels = dim_pixels
         self.dim_gsd = dim_gsd
         self.dim_bins = dim_bins
@@ -54,6 +56,7 @@ class LaneDetectionDataset(Dataset):
         self.geometry_dir = self.data_dir / "geometry"
         self.image_dir = self.data_dir / "images"
         self.obj_preds_dir = self.data_dir / "object_predictions"
+        self.prior_preds_dir = self.data_dir / "prior_predictions"
 
         # Data config
         config_path = self.data_dir / "data_config.json"
@@ -99,6 +102,10 @@ class LaneDetectionDataset(Dataset):
 
         # Object predictions
         self.obj_predictions, self.num_obj_pred_classes, self.obj_pred_config = self._load_all_obj_preds()
+
+        # Prior predictions
+        if self.use_prior_preds:
+            self.prior_preds = self._load_all_prior_preds()
 
     def _build_link_order(self):
         order = {}
@@ -167,6 +174,39 @@ class LaneDetectionDataset(Dataset):
         print(f'{num_empty} ({percent_empty}%) link segments without object predictions')
 
         return obj_preds, len(all_labels), obj_pred_config
+
+
+    def _load_all_prior_preds(self):
+        prior_preds = {}
+        predictions_path = self.prior_preds_dir / "combined.parquet"
+
+        if not predictions_path.exists():
+            raise FileNotFoundError(f"Missing combined.parquet in {self.prior_preds_dir}")
+
+        df = pd.read_parquet(predictions_path)
+        keep_cols = ['link_segment_id', 'distance']
+        for dr in ['forward', 'backward']:
+            logit_cols = [f'{c}_logit_{dr}' for c in range(self.max_lanes + 1)]
+            df[logit_cols] = pd.DataFrame(df[f'logits_{dr}'].to_list(), index=df.index)
+            keep_cols.extend(logit_cols)
+            keep_cols.extend([f'conf_{dr}', f'entropy_{dr}'])
+        df = df[keep_cols]
+
+        for seg_id, group in df.groupby("link_segment_id"):
+            prior_preds[seg_id] = group.drop(columns='link_segment_id')
+
+        # Ensure all training link segment IDs are present
+        empty_df = pd.DataFrame(columns=df.drop(columns='link_segment_id').columns, dtype=float)
+        num_empty = 0
+        for seg_id in self.seg_ids:
+            if seg_id not in prior_preds:
+                prior_preds[seg_id] = empty_df.copy()
+                num_empty += 1
+
+        percent_empty = int(num_empty / len(self.seg_ids) * 100)
+        print(f'{num_empty} ({percent_empty}%) link segments without prior predictions')
+
+        return prior_preds
 
     def __len__(self):
         return len(self.samples)
@@ -425,15 +465,16 @@ class LaneDetectionDataset(Dataset):
     def get_slice_data(
             self,
             lon_neighbours: list[dict],
-            distance_along: float,
-            used_preceding_length: float,
-            used_proceeding_length: float,
+            dist_along: float,
+            used_pre_len: float,
+            used_pro_len: float,
             fast: False,
     ):
 
         img_slices = []
         obj_preds_slices = []
-        slice_anchor_m = 0
+        slice_offset =
+        slice_offset_img = 0
 
         for i, lon_neighbour in enumerate(lon_neighbours):
 
@@ -447,59 +488,68 @@ class LaneDetectionDataset(Dataset):
             is_first_uv = seg["segment_ix_uv"] == 0
             is_last_uv = seg["segment_ix_vu"] == 0
 
-            seg_len_m = seg["length_proj"]
-            seg_used_len_m = lon_neighbour.get("used_length", 0.0)
-            camera_offset_m = seg.get("camera_point_offset", 0.0)
+            seg_len = seg["length_proj"]
+            seg_used_len = lon_neighbour.get("used_length", 0.0)
+            camera_offset = seg.get("camera_point_offset", 0.0)
 
             # Measurement from bottom
-            img_center_m = self.dim_gsd / 2
-            seg_center_m = img_center_m - camera_offset_m
-            seg_start_m = seg_center_m - seg_len_m / 2
-            seg_end_m = seg_center_m + seg_len_m / 2
+            img_c_img = self.dim_gsd / 2
+            seg_c_img = img_c_img - camera_offset
+            seg_s_img = seg_c_img - seg_len / 2
+            seg_e_img = seg_c_img + seg_len / 2
 
-            pad_above_m = 0
-            pad_below_m = 0
+            pad_above = 0
+            pad_below = 0
+            img_pad_above = 0
+            img_pad_below = 0
 
-            if (is_first and is_first_uv) or (is_first and (used_preceding_length < self.lon_coverage)):
-                extra_needed_m = self.lon_coverage - used_preceding_length
-                extra_img_m = min(extra_needed_m, self.max_extra_image)
+            if (is_first and is_first_uv) or (is_first and (used_pre_len < self.lon_coverage)):
+                pad_below = self.lon_coverage - used_pre_len
+                extra_img = min(pad_below, self.max_extra_image)
                 if is_current:
-                    extra_img_m += min(seg_start_m + distance_along - used_preceding_length - extra_img_m, 0)
-                    slice_start_m = seg_start_m + distance_along - used_preceding_length - extra_img_m
+                    extra_img += min(seg_s_img + dist_along - used_pre_len - extra_img, 0)
+                    slice_s_img = seg_s_img + dist_along - used_pre_len - extra_img
+                    slice_s = max(dist_along - self.lon_coverage, 0)
                 else:
-                    extra_img_m += min(seg_end_m - seg_used_len_m - extra_img_m, 0)
-                    slice_start_m = seg_end_m - seg_used_len_m - extra_img_m
-                pad_below_m = extra_needed_m - extra_img_m
+                    extra_img += min(seg_e_img - seg_used_len - extra_img, 0)
+                    slice_s_img = seg_e_img - seg_used_len - extra_img
+                    slice_s = seg_len - seg_used_len
+                img_pad_below = pad_below - extra_img
             elif is_first:
-                slice_start_m = seg_end_m - seg_used_len_m
+                slice_s_img = seg_e_img - seg_used_len
+                slice_s = seg_len - seg_used_len
             else:
-                slice_start_m = seg_start_m
+                slice_s_img = seg_s_img
+                slice_s = 0
 
-            if (is_last and is_last_uv) or (is_last and (used_proceeding_length < self.lon_coverage)):
-                extra_needed_m = self.lon_coverage - used_proceeding_length
-                extra_img_m = min(extra_needed_m, self.max_extra_image)
+            if (is_last and is_last_uv) or (is_last and (used_pro_len < self.lon_coverage)):
+                pad_above = self.lon_coverage - used_pro_len
+                extra_img = min(pad_above, self.max_extra_image)
                 if is_current:
-                    extra_img_m -= max(
-                        seg_start_m + distance_along + used_proceeding_length + extra_img_m - self.dim_gsd, 0
-                    )
-                    slice_end_m = seg_start_m + distance_along + used_proceeding_length + extra_img_m
+                    extra_img -= max(seg_s_img + dist_along + used_pro_len + extra_img - self.dim_gsd, 0)
+                    slice_e_img = seg_s_img + dist_along + used_pro_len + extra_img
+                    slice_e = min(dist_along + self.lon_coverage, seg_len)
                 else:
-                    extra_img_m -= max(seg_start_m + seg_used_len_m + extra_img_m - self.dim_gsd, 0)
-                    slice_end_m = seg_start_m + seg_used_len_m + extra_img_m
-                pad_above_m = extra_needed_m - extra_img_m
+                    extra_img -= max(seg_s_img + seg_used_len + extra_img - self.dim_gsd, 0)
+                    slice_e_img = seg_s_img + seg_used_len + extra_img
+                    slice_e = seg_used_len
+                img_pad_above = pad_above - extra_img
             elif is_last:
-                slice_end_m = seg_start_m + seg_used_len_m
+                slice_e_img = seg_s_img + seg_used_len
+                slice_e = seg_used_len
             else:
-                slice_end_m = seg_end_m
+                slice_e_img = seg_e_img
+                slice_e = seg_len
 
             if not fast:
-                seg_img_slices = self.get_image_slices(seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m)
+                seg_img_slices = self.get_image_slices(seg_id, slice_s_img, slice_e_img, img_pad_above, img_pad_below)
                 img_slices = seg_img_slices + img_slices
 
-            slice_anchor_m += pad_below_m + slice_end_m - slice_start_m
-            obj_preds_slice = self.get_obj_preds_slice(seg_id, slice_start_m, slice_end_m, slice_anchor_m)
+            slice_offset +=
+            slice_offset_img += img_pad_below + slice_e_img - slice_s_img
+            obj_preds_slice = self.get_obj_preds_slice(seg_id, slice_s_img, slice_e_img, slice_offset_img)
             obj_preds_slices.append(obj_preds_slice)
-            slice_anchor_m += pad_above_m
+            slice_offset_img += img_pad_above
 
         img_tensor = torch.cat(img_slices, dim=1) if not fast else None
 

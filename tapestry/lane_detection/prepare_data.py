@@ -23,6 +23,7 @@ DATA_DIR = Path("data") / "lane_detection"
 IMAGE_DIR = DATA_DIR / "images"
 GEOM_DIR = DATA_DIR / "geometry"
 OBJ_PREDS_DIR = DATA_DIR / "object_predictions"
+PRIOR_PREDS_DIR = DATA_DIR / "prior_predictions"
 
 for DIR in [IMAGE_DIR, GEOM_DIR, OBJ_PREDS_DIR]:
     DIR.mkdir(parents=True, exist_ok=True)
@@ -43,6 +44,7 @@ def prepare_data(
         segs_all: gpd.GeoDataFrame,
         crs_lookup: dict[str, int],
         object_prediction_run_ids: list[str],
+        prior_run_id: str | None = None,
         skip_image_download: bool = False,
         threads: int | None = None,
 ):
@@ -88,18 +90,18 @@ def prepare_data(
     class_offset = 0
     obj_pred_conf = {}
 
-    for run_id in object_prediction_run_ids:
-        print(f"  ↪ Downloading object predictions from {run_id}...")
+    for obj_run_id in object_prediction_run_ids:
+        print(f"  ↪ Downloading object predictions from {obj_run_id}...")
 
         # Download predictions
-        run_dir = OBJ_PREDS_DIR / run_id
-        s3_prefix = f"object_detection/{run_id}"
+        run_dir = OBJ_PREDS_DIR / obj_run_id
+        s3_prefix = f"object_detection/{obj_run_id}"
         download_dir_from_s3(s3_prefix=s3_prefix, local_dir=run_dir, bucket=S3_BUCKET_PREDS)
 
         # Download class_info.json separately
         class_info_path = run_dir / "class_info.json"
         if not class_info_path.exists():
-            print(f"  ↪ Downloading class_info.json for {run_id}...")
+            print(f"  ↪ Downloading class_info.json for {obj_run_id}...")
             download_file_from_s3(
                 s3_key=f"{s3_prefix}/class_info.json",
                 local_path=class_info_path,
@@ -107,7 +109,7 @@ def prepare_data(
             )
 
         if not class_info_path.exists():
-            raise FileNotFoundError(f"class_info.json for run {run_id} not found in S3 or local.")
+            raise FileNotFoundError(f"class_info.json for run {obj_run_id} not found in S3 or local.")
 
         with open(class_info_path) as f:
             class_info = json.load(f)
@@ -119,7 +121,7 @@ def prepare_data(
                 "remapped_id": old_id + class_offset,
                 "class": entry["label"]
             }
-        obj_pred_conf[run_id] = remap_dict
+        obj_pred_conf[obj_run_id] = remap_dict
 
         # Apply remapping to each parquet file in the run
         for parquet_path in run_dir.glob("*.parquet"):
@@ -145,6 +147,31 @@ def prepare_data(
     obj_preds = pd.concat(global_preds, ignore_index=True)
     obj_preds.to_parquet(OBJ_PREDS_DIR / "predictions.parquet")
     print(f"✅ Combined predictions from {len(object_prediction_run_ids)} runs.")
+
+    if prior_run_id is not None:
+        print(f"🟡 Downloading prior lane predictions from run {prior_run_id}...")
+        PRIOR_PREDS_DIR.mkdir(parents=True, exist_ok=True)
+        s3_prefix = f"lane_detection/{prior_run_id}"
+        download_dir_from_s3(s3_prefix=s3_prefix, local_dir=PRIOR_PREDS_DIR, bucket=S3_BUCKET_PREDS)
+
+        combined_path = PRIOR_PREDS_DIR / "combined.parquet"
+        print(f"🟡 Combining prior prediction files into {combined_path}...")
+
+        parquet_paths = sorted(PRIOR_PREDS_DIR.glob("*.parquet"))
+        dfs = []
+        for path in parquet_paths:
+            try:
+                df = pd.read_parquet(path)
+                dfs.append(df)
+            except Exception as e:
+                print(f"⚠️ Skipping {path.name}: {e}")
+
+        if dfs:
+            combined_df = pd.concat(dfs, ignore_index=True)
+            combined_df.to_parquet(combined_path, index=False)
+            print(f"✅ Combined prior predictions saved to {combined_path} ({len(combined_df)} rows)")
+        else:
+            print("⚠️ No valid prior prediction files found to combine.")
 
     print("🟡 Filtering link segments with images...")
     if not skip_image_download:
@@ -247,6 +274,12 @@ def main():
         nargs="+",
         help="One or more run IDs for object detection predictions",
     )
+    parser.add_argument(
+        "--prior-run-id",
+        type=str,
+        default=None,
+        help="Run ID for previous lane detection model predictions (used in second-stage pseudo-recurrent training)",
+    )
     filter_type = parser.add_mutually_exclusive_group(required=True)
     filter_type.add_argument("--base-networks", nargs="+", type=str)
     filter_type.add_argument("--annotation-areas", nargs="*", type=str)
@@ -279,6 +312,7 @@ def main():
         segs_all=link_segments,
         crs_lookup=crs_lookup,
         object_prediction_run_ids=args.object_detection_run_ids,
+        prior_run_id=args.prior_run_id,
         skip_image_download=args.skip_image_download,
         threads=args.threads,
     )
