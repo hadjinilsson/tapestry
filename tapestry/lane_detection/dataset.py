@@ -41,6 +41,7 @@ class LaneDetectionDataset(Dataset):
         self.dim_bins = dim_bins
         self.lat_coverage = lat_coverage
         self.lon_coverage = lon_coverage
+        self.pred_dist = pred_dist
         self.max_extra_image = max_extra_image
         self.max_shift = max_shift
         self.max_lanes = max_lanes
@@ -49,6 +50,7 @@ class LaneDetectionDataset(Dataset):
 
         # Derived
         self.pixels_per_meter = dim_pixels / dim_gsd
+        self.num_prior_preds = int(round(2 * lon_coverage / pred_dist))
         self.enable_flip = (self.mode == "train")
         self.num_bins = int(round(dim_gsd / dim_bins))
 
@@ -105,7 +107,7 @@ class LaneDetectionDataset(Dataset):
 
         # Prior predictions
         if self.use_prior_preds:
-            self.prior_preds = self._load_all_prior_preds()
+            self.prior_predictions = self._load_all_prior_preds()
 
     def _build_link_order(self):
         order = {}
@@ -116,7 +118,7 @@ class LaneDetectionDataset(Dataset):
                 order[link_id][direction] = list(group["link_segment_id"])
         return order
 
-    def _build_sample_index(self, spacing: float):
+    def _build_sample_index(self):
         sample_index = []
         sample_segs = self.link_segments
         if self.seg_ids is not None:
@@ -125,7 +127,7 @@ class LaneDetectionDataset(Dataset):
         for seg_id in seg_ids:
             seg = self.link_segments.loc[seg_id]
             seg_len = seg["length_proj"]
-            num_samples = max(int(seg_len // spacing), 1)
+            num_samples = max(int(seg_len // self.pred_dist), 1)
             ds = np.linspace(0, seg_len, num=num_samples, endpoint=False)
             for d in ds:
                 sample_index.append((seg_id, d))
@@ -213,22 +215,22 @@ class LaneDetectionDataset(Dataset):
 
     def __getitem__(self, idx, fast=False):
         if self.mode == "predict":
-            seg_id, distance_along = self.samples[idx]
+            seg_id, dist_along = self.samples[idx]
             seg = self.link_segments.loc[seg_id]
         else:
             seg_id = self.samples[idx]
             seg = self.link_segments.loc[seg_id]
-            distance_along = random.uniform(0.0, seg["length_proj"])
+            dist_along = random.uniform(0.0, seg["length_proj"])
 
         # Get link segment data
         seg_geom = seg['geom_proj']
         seg_len = seg['length_proj']
         link_id = seg['link_id']
 
-        sample_point = seg_geom.interpolate(distance_along)
+        sample_point = seg_geom.interpolate(dist_along)
 
         # # Cross-sectional line to get lateral neighbours and section labels
-        cross_section = self.get_cross_section(seg_geom, distance_along, sample_point)
+        cross_section = self.get_cross_section(seg_geom, dist_along, sample_point)
 
         #  Get labels
         if self.has_labels:
@@ -239,14 +241,20 @@ class LaneDetectionDataset(Dataset):
 
         # Get neighbours
         lat_neighbours = self.get_lat_neighbours(seg_id, sample_point, cross_section) if not fast else None
-        lon_neighbours = self.get_lon_neighbours(seg_id, distance_along)
+        lon_neighbours = self.get_lon_neighbours(seg_id, dist_along)
         self.check_lon_continuity(link_id, lon_neighbours)
 
         # Get used lengths
-        used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, distance_along, seg_len)
+        used_pre_len, used_pro_len = self.get_used_lengths(lon_neighbours, dist_along, seg_len)
 
         # Get slice data
-        img, obj_preds = self.get_slice_data(lon_neighbours, distance_along, used_pre_len, used_pro_len, fast)
+        img, obj_preds, prior_preds = self.get_slice_data(
+            lon_neighbours,
+            dist_along,
+            used_pre_len,
+            used_pro_len,
+            fast
+        )
 
         # Augmentations
         if self.mode == "train" and not fast:
@@ -288,6 +296,7 @@ class LaneDetectionDataset(Dataset):
                 sections['direction'] = sections.direction.map({'forward': 'backward', 'backward': 'forward'})
                 sections['x_offset'] *= -1
                 lat_neighbours['x_offset'] *= -1
+                if self.use_prior_preds: prior_preds["distance"] = self.dim_gsd - prior_preds["distance"]
 
         else:
             shift = 0
@@ -298,7 +307,7 @@ class LaneDetectionDataset(Dataset):
         obj_scores = self.format_object_predictions(obj_preds)
         lat_neighbours = self.format_lat_neighbours(lat_neighbours) if not fast else None
         if has_label: sections = self.format_sections(sections)
-
+        if self.use_prior_preds: self.format_prior_preds(prior_preds)
 
         # To tensor
         obj_scores =  torch.tensor(obj_scores.values, dtype=torch.float32)
@@ -385,7 +394,7 @@ class LaneDetectionDataset(Dataset):
         lat_neighbours = self.get_intersecting(lat_segs, seg_geom, sample_point, cross_section)
         return lat_neighbours
 
-    def get_lon_neighbours(self, current_seg_id: str, distance_along: float):
+    def get_lon_neighbours(self, current_seg_id: str, dist_along: float):
 
         current_seg = self.link_segments.loc[current_seg_id]
         link_id: LineString = current_seg["link_id"]
@@ -400,7 +409,7 @@ class LaneDetectionDataset(Dataset):
         lon_neighbours = []
 
         # Preceding (bottom of image)
-        remaining_back = self.lon_coverage - distance_along
+        remaining_back = self.lon_coverage - dist_along
         i = current_idx - 1
         while remaining_back > 0 and i >= 0:
             pre_seg_id = uv_seg_order[i]
@@ -416,8 +425,8 @@ class LaneDetectionDataset(Dataset):
 
         # Current segment
         current_seg_used_len = (
-                min(distance_along, self.lon_coverage) +
-                min(current_seg_len - distance_along, self.lon_coverage)
+                min(dist_along, self.lon_coverage) +
+                min(current_seg_len - dist_along, self.lon_coverage)
         )
         current = {
             "link_segment_id": current_seg_id,
@@ -427,7 +436,7 @@ class LaneDetectionDataset(Dataset):
         lon_neighbours.append(current)
 
         # Proceeding (top of image)
-        remaining_forward = self.lon_coverage - (current_seg_len - distance_along)
+        remaining_forward = self.lon_coverage - (current_seg_len - dist_along)
         i = current_idx + 1
         while remaining_forward > 0 and i < len(uv_seg_order):
             pro_seg_id = uv_seg_order[i]
@@ -473,7 +482,8 @@ class LaneDetectionDataset(Dataset):
 
         img_slices = []
         obj_preds_slices = []
-        slice_offset =
+        prior_preds_slices = [] if self.use_prior_preds else None
+        slice_offset = 0
         slice_offset_img = 0
 
         for i, lon_neighbour in enumerate(lon_neighbours):
@@ -542,14 +552,26 @@ class LaneDetectionDataset(Dataset):
                 slice_e = seg_len
 
             if not fast:
-                seg_img_slices = self.get_image_slices(seg_id, slice_s_img, slice_e_img, img_pad_above, img_pad_below)
+                seg_img_slices = self.get_image_slices(seg_id, slice_s_img, slice_e_img, img_pad_below, img_pad_above)
                 img_slices = seg_img_slices + img_slices
 
-            slice_offset +=
             slice_offset_img += img_pad_below + slice_e_img - slice_s_img
             obj_preds_slice = self.get_obj_preds_slice(seg_id, slice_s_img, slice_e_img, slice_offset_img)
             obj_preds_slices.append(obj_preds_slice)
             slice_offset_img += img_pad_above
+
+            if self.use_prior_preds:
+                slice_offset += pad_below
+                prior_preds_slice = self.get_prior_preds_slice(
+                    seg_id,
+                    slice_s,
+                    slice_e,
+                    # pad_below,
+                    # pad_above,
+                    slice_offset,
+                )
+                prior_preds_slices.append(prior_preds_slice)
+                slice_offset += seg_used_len + pad_above
 
         img_tensor = torch.cat(img_slices, dim=1) if not fast else None
 
@@ -558,9 +580,16 @@ class LaneDetectionDataset(Dataset):
         else:
             obj_preds = pd.DataFrame()
 
-        return img_tensor, obj_preds
+        if self.use_prior_preds and prior_preds_slices:
+            prior_preds = pd.concat(prior_preds_slices, ignore_index=True)
+        elif self.use_prior_preds:
+            prior_preds = pd.DataFrame()
+        else:
+            prior_preds = None
 
-    def get_image_slices(self, seg_id, slice_start_m, slice_end_m, pad_above_m, pad_below_m):
+        return img_tensor, obj_preds, prior_preds
+
+    def get_image_slices(self, seg_id, slice_start_m, slice_end_m, pad_below_m, pad_above_m):
 
         seg = self.link_segments.loc[seg_id]
         camera_id = seg["camera_point_id"]
@@ -613,7 +642,7 @@ class LaneDetectionDataset(Dataset):
             seg_id: str,
             slice_start_m,
             slice_end_m,
-            slice_anchor_m,
+            slice_offset_m,
     ) -> pd.DataFrame:
 
         seg = self.link_segments.loc[seg_id]
@@ -634,16 +663,45 @@ class LaneDetectionDataset(Dataset):
         # Compute camera-centered crop bounds (same as image)
         slice_start_px = int(round((self.dim_gsd - slice_end_m) * self.pixels_per_meter))
         slice_end_px = int(round((self.dim_gsd - slice_start_m) * self.pixels_per_meter))
-        slice_anchor_px = int(round((self.dim_gsd - slice_anchor_m) * self.pixels_per_meter))
+        slice_offset_px = int(round((self.dim_gsd - slice_offset_m) * self.pixels_per_meter))
 
         # Filter to those inside cropped image
         obj_preds = obj_preds[obj_preds["y_center"].between(slice_start_px, slice_end_px)]
         if obj_preds.empty:
             return obj_preds
 
-        obj_preds["y_center"] += slice_anchor_px - slice_start_px
+        obj_preds["y_center"] += slice_offset_px - slice_start_px
 
         return obj_preds
+
+    def get_prior_preds_slice(
+            self,
+            seg_id: str,
+            slice_start,
+            slice_end,
+            # pad_below,
+            # pad_above,
+            slice_offset,
+    ) -> pd.DataFrame:
+
+        prior_pred_slices = []
+
+        # Load predictions
+        prior_preds = self.prior_predictions.get(seg_id, pd.DataFrame())
+        # Filter to those inside used length and offset
+        if not prior_preds.empty:
+            prior_preds = prior_preds[prior_preds["distance"].between(slice_start, slice_end)].copy()
+            prior_preds["distance"] += slice_offset - slice_start
+        # prior_pred_slices.append(prior_pred_slice)
+
+        # if pad_below > 0:
+        #     # Create df with shape int(pad_below), prior_pred_slice.shape[1], columns and dtypes from prior_pred_slices
+        #     # distance column = range(int(pad_below))
+        #     # not sure what logit, conf, and entropy columns should be
+        #     # prior_pred_slices.append()
+        #     pass
+
+        return prior_preds
 
     def shift_image(self, img, shift_m):
         shift_px = int(round(shift_m * self.pixels_per_meter))
@@ -701,6 +759,31 @@ class LaneDetectionDataset(Dataset):
         obj_scores = obj_scores.groupby('class')[slot_cols].sum().reindex(range(self.num_obj_pred_classes), fill_value=0)
 
         return obj_scores
+
+    def format_prior_preds(self, prior_preds):
+        prior_preds = prior_preds.sort_values('distance').reset_index(drop=True)
+
+        num_upper_preds = self.num_prior_preds // 2
+        num_lower_preds = self.num_prior_preds - num_upper_preds
+
+        upper_preds = prior_preds[prior_preds['distance'] < self.lon_coverage].copy()
+        lower_preds = prior_preds[prior_preds['distance'] >= self.lon_coverage].copy().reset_index(drop=True)
+
+        num_extra = num_upper_preds - len(upper_preds)
+        if num_extra > 0:
+            upper_preds = upper_preds.reindex(range(-num_extra, len(upper_preds)), fill_value=0)
+        elif num_extra < 0:
+            upper_preds = upper_preds.tail(num_upper_preds)
+
+        num_extra = num_lower_preds - len(lower_preds)
+        if num_extra > 0:
+            lower_preds = lower_preds.reindex(range(len(lower_preds) + num_extra), fill_value=0)
+        elif num_extra < 0:
+            lower_preds = lower_preds.head(num_lower_preds)
+
+        prior_preds = pd.concat([upper_preds, lower_preds]).drop(columns='distance')
+
+        return prior_preds
 
     def format_lat_neighbours(self, lat_neighbours):
         lat_neighbours['x_offset'] += self.lat_coverage

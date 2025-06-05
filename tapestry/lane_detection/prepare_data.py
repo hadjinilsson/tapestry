@@ -25,8 +25,18 @@ GEOM_DIR = DATA_DIR / "geometry"
 OBJ_PREDS_DIR = DATA_DIR / "object_predictions"
 PRIOR_PREDS_DIR = DATA_DIR / "prior_predictions"
 
-for DIR in [IMAGE_DIR, GEOM_DIR, OBJ_PREDS_DIR]:
+for DIR in [GEOM_DIR, OBJ_PREDS_DIR, PRIOR_PREDS_DIR]:
     DIR.mkdir(parents=True, exist_ok=True)
+    for file in DIR.glob("*"):
+        if file.is_file():
+            file.unlink()
+        elif file.is_dir():
+            for subfile in file.rglob("*"):
+                if subfile.is_file():
+                    subfile.unlink()
+            file.rmdir()
+
+IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_crs_lookup() -> dict[str, int]:
