@@ -25,6 +25,7 @@ DATA_DIR = Path("data") / "lane_detection"
 
 
 def train(
+        use_prior_preds=False,
         batch_size:int = 16,
         num_workers: int = 4,
         val_split: float = 0.2,
@@ -47,6 +48,7 @@ def train(
 
     # ---- Init model ----
     model = LaneDetectionModel(
+        use_prior_preds=use_prior_preds,
         max_lanes=full_dataset.max_lanes,
         obj_pred_shape=(full_dataset.num_obj_pred_classes, full_dataset.num_bins),
         lat_vec_len=int(full_dataset.lat_coverage * 2),
@@ -92,6 +94,11 @@ def train(
         log_every_n_steps=10
     )
 
+    if use_prior_preds:
+        print("🧠 Using prior predictions (second-stage model)")
+    else:
+        print("🔰 Training without prior predictions (first-stage model)")
+
     # ---- Train ----
     trainer.fit(model, datamodule=data_module)
 
@@ -102,6 +109,7 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--use-prior-preds", action="store_true", help="Use prior predictions in model input")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--val-split", type=float, default=0.2)
@@ -112,6 +120,7 @@ def main():
     args = parser.parse_args()
 
     run_id, run_dir = train(
+        args.use_prior_preds,
         args.batch_size,
         args.num_workers,
         args.val_split,

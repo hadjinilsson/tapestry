@@ -19,11 +19,14 @@ def soft_dice_loss(logits, targets, smooth=1e-5):
 class LaneDetectionModel(pl.LightningModule):
     def __init__(
         self,
+        use_prior_preds=False,
         max_lanes=5,
         obj_pred_shape=(15, 50),
+        prior_pred_shape=(17, 50),
         lat_vec_len=70,
         image_feat_dim=128,
         obj_feat_dim=64,
+        prior_pred_feat_dim=64,
         lat_feat_dim=32,
         hidden_dim=128,
         class_weights=None,
@@ -43,6 +46,7 @@ class LaneDetectionModel(pl.LightningModule):
         self.max_lanes = max_lanes
         self.num_lane_classes = max_lanes + 1
         self.dice_weight = dice_weight
+        self.use_prior_preds = use_prior_preds
 
         self.register_buffer("obj_mean", torch.tensor(obj_mean, dtype=torch.float32) if obj_mean is not None else torch.zeros(obj_pred_shape))
         self.register_buffer("obj_std", torch.tensor(obj_std, dtype=torch.float32) if obj_std is not None else torch.ones(obj_pred_shape))
@@ -72,6 +76,17 @@ class LaneDetectionModel(pl.LightningModule):
             nn.ReLU()
         )
 
+        self.prior_encoder = nn.Sequential(
+            nn.Conv1d(prior_pred_shape[0], 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(32, prior_pred_feat_dim),
+            nn.ReLU()
+        )
+
         self.lat_encoder = nn.Sequential(
             nn.Linear(lat_vec_len, lat_feat_dim),
             nn.ReLU(),
@@ -79,6 +94,9 @@ class LaneDetectionModel(pl.LightningModule):
         )
 
         total_feat_dim = image_feat_dim + obj_feat_dim + lat_feat_dim
+        if self.use_prior_preds:
+            total_feat_dim += prior_pred_feat_dim
+
         self.classifier = nn.Sequential(
             nn.Linear(total_feat_dim, hidden_dim),
             nn.ReLU(),
@@ -94,13 +112,21 @@ class LaneDetectionModel(pl.LightningModule):
         self.val_recall_bwd = Recall(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
         self.val_f1_bwd = F1Score(task="multiclass", num_classes=self.num_lane_classes, average='weighted')
 
-    def forward(self, image, object_scores, lat_neighbours):
+    def forward(self, image, object_scores, lat_neighbours, prior_predictions=None):
         object_scores = (object_scores - self.obj_mean[:, None]) / self.obj_std[:, None]
         object_scores = object_scores.unsqueeze(0) if object_scores.ndim == 2 else object_scores
+
         img_feat = self.image_encoder(image)
         obj_feat = self.obj_encoder(object_scores)
         lat_feat = self.lat_encoder(lat_neighbours)
-        x = torch.cat([img_feat, obj_feat, lat_feat], dim=-1)
+
+        features = [img_feat, obj_feat, lat_feat]
+
+        if prior_predictions is not None:
+            prior_feat = self.prior_encoder(prior_predictions.permute(0, 2, 1))
+            features.append(prior_feat)
+
+        x = torch.cat(features, dim=-1)
         logits = self.classifier(x)
         return logits.view(-1, 2, self.num_lane_classes)
 
@@ -114,14 +140,16 @@ class LaneDetectionModel(pl.LightningModule):
         return ce_loss + self.dice_weight * dice_loss
 
     def training_step(self, batch, batch_idx):
-        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"])
+        prior = batch["prior_predictions"] if "prior_predictions" in batch else None
+        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"], prior)
         targets = batch["sections"].argmax(dim=-1)
         loss = self.compute_loss(logits, targets)
         self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"])
+        prior = batch["prior_predictions"] if "prior_predictions" in batch else None
+        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"], prior)
         targets = batch["sections"].argmax(dim=-1)
         loss = self.compute_loss(logits, targets)
 
@@ -143,7 +171,8 @@ class LaneDetectionModel(pl.LightningModule):
         return loss
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"])  # (B, 2, C)
+        prior = batch["prior_predictions"] if "prior_predictions" in batch else None
+        logits = self(batch["image"], batch["object_scores"], batch["lat_neighbours"], prior)
         probs = F.softmax(logits, dim=-1)
 
         preds = torch.argmax(probs, dim=-1)  # (B, 2)

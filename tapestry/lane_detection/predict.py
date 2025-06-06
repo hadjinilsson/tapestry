@@ -56,6 +56,7 @@ def get_within_bounds(df, bounds):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--use-prior-preds", action="store_true", help="Use prior predictions in model input")
     filter_type = parser.add_mutually_exclusive_group(required=True)
     filter_type.add_argument("--base-networks", nargs="+", type=str)
     filter_type.add_argument("--annotation-areas", nargs="*", type=str)
@@ -137,7 +138,12 @@ def main():
                 log_every_n_steps=50,
             )
 
-            model = LaneDetectionModel.load_from_checkpoint(checkpoint_path)
+            if args.use_prior_preds:
+                print("🧠 Predicting with prior predictions")
+            else:
+                print("🔰 Predicting without prior predictions")
+
+            model = LaneDetectionModel.load_from_checkpoint(checkpoint_path, use_prior_preds=args.use_prior_preds)
             model.eval()
             batches = trainer.predict(model, dataloaders=loader, return_predictions=True)
 

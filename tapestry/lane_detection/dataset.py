@@ -6,6 +6,7 @@ from shapely.affinity import rotate
 from shapely import wkb, distance
 from pathlib import Path
 from PIL import Image
+import math
 import random
 import json
 import numpy as np
@@ -307,7 +308,7 @@ class LaneDetectionDataset(Dataset):
         obj_scores = self.format_object_predictions(obj_preds)
         lat_neighbours = self.format_lat_neighbours(lat_neighbours) if not fast else None
         if has_label: sections = self.format_sections(sections)
-        if self.use_prior_preds: self.format_prior_preds(prior_preds)
+        if self.use_prior_preds: prior_preds = self.format_prior_preds(prior_preds)
 
         # To tensor
         obj_scores =  torch.tensor(obj_scores.values, dtype=torch.float32)
@@ -316,13 +317,15 @@ class LaneDetectionDataset(Dataset):
             sections = torch.tensor(sections, dtype=torch.float32)
         else:
             sections = torch.zeros((2, self.max_lanes + 1), dtype=torch.int32)
+        if self.use_prior_preds: prior_preds = torch.tensor(prior_preds.values, dtype=torch.float32)
 
         #  Check for nans
         to_check = [obj_scores, sections] if fast else [img, obj_scores, lat_neighbours, sections]
+        if self.use_prior_preds: to_check.append(prior_preds)
         for tns in to_check:
             assert not torch.isnan(tns).any(), "NaN detected in input"
 
-        return {
+        sample = {
             "numerical_id": idx,
             "image": img,
             "object_scores": obj_scores,
@@ -332,6 +335,10 @@ class LaneDetectionDataset(Dataset):
             "flip": flip,
             "has_label": has_label,
         }
+
+        if self.use_prior_preds: sample['prior_predictions'] = prior_preds
+
+        return sample
 
     def get_cross_section(self, seg_geom, distance_along, sample_point):
         tangent = seg_geom.interpolate(min(distance_along + 0.1, seg_geom.length))
@@ -762,6 +769,7 @@ class LaneDetectionDataset(Dataset):
 
     def format_prior_preds(self, prior_preds):
         prior_preds = prior_preds.sort_values('distance').reset_index(drop=True)
+        prior_preds['pad'] = 0.0
 
         num_upper_preds = self.num_prior_preds // 2
         num_lower_preds = self.num_prior_preds - num_upper_preds
@@ -769,19 +777,30 @@ class LaneDetectionDataset(Dataset):
         upper_preds = prior_preds[prior_preds['distance'] < self.lon_coverage].copy()
         lower_preds = prior_preds[prior_preds['distance'] >= self.lon_coverage].copy().reset_index(drop=True)
 
+        out_cols = [c for c in prior_preds.columns if c != 'distance']
+        pad_row = [2.0, 0.0, -2.0, -3.0, -4.0, -5.0, 0.72, 0.95] * 2 + [1]
+        pad_row_dict = dict(zip(out_cols, pad_row))
+
         num_extra = num_upper_preds - len(upper_preds)
         if num_extra > 0:
-            upper_preds = upper_preds.reindex(range(-num_extra, len(upper_preds)), fill_value=0)
+            pad_df = pd.DataFrame([pad_row_dict] * num_extra)
+            upper_preds = pd.concat([pad_df, upper_preds], ignore_index=True)
         elif num_extra < 0:
             upper_preds = upper_preds.tail(num_upper_preds)
 
         num_extra = num_lower_preds - len(lower_preds)
         if num_extra > 0:
-            lower_preds = lower_preds.reindex(range(len(lower_preds) + num_extra), fill_value=0)
+            pad_df = pd.DataFrame([pad_row_dict] * num_extra)
+            lower_preds = pd.concat([lower_preds, pad_df], ignore_index=True)
         elif num_extra < 0:
             lower_preds = lower_preds.head(num_lower_preds)
 
-        prior_preds = pd.concat([upper_preds, lower_preds]).drop(columns='distance')
+        prior_preds = pd.concat([upper_preds, lower_preds], ignore_index=True)
+        prior_preds = prior_preds.drop(columns='distance')
+
+        max_entropy = math.log(self.max_lanes + 1)
+        prior_preds['entropy_forward'] /= max_entropy
+        prior_preds['entropy_backward'] /= max_entropy
 
         return prior_preds
 
