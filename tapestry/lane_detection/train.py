@@ -38,7 +38,7 @@ def train(
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # ---- Load dataset ----
-    full_dataset = LaneDetectionDataset(data_root=DATA_DIR, mode="train")
+    full_dataset = LaneDetectionDataset(data_root=DATA_DIR, mode="train", use_prior_preds=use_prior_preds)
     val_size = int(len(full_dataset) * val_split)
     train_size = len(full_dataset) - val_size
     train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
