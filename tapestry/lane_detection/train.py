@@ -51,7 +51,7 @@ def train(
         use_prior_preds=use_prior_preds,
         max_lanes=full_dataset.max_lanes,
         obj_pred_shape=(full_dataset.num_obj_pred_classes, full_dataset.num_bins),
-        prior_pred_shape=(full_dataset.max_lanes * 2 + 5, full_dataset.num_prior_preds),
+        prior_pred_shape=((full_dataset.max_lanes + 1) * 2 + 5, full_dataset.num_prior_preds),
         lat_vec_len=int(full_dataset.lat_coverage * 2),
         class_weights=stats['lane_weights'],
         obj_mean=stats['object_pred_means'].values,
