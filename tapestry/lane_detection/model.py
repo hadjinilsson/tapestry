@@ -127,15 +127,8 @@ class LaneDetectionModel(pl.LightningModule):
             features.append(prior_feat)
 
         x = torch.cat(features, dim=-1)
-
-        print("image_feat", img_feat.shape)
-        print("obj_feat", obj_feat.shape)
-        print("lat_feat", lat_feat.shape)
-        if self.use_prior_preds:
-            print("prior_feat", prior_feat.shape)
-        print("x", x.shape)
-
         logits = self.classifier(x)
+
         return logits.view(-1, 2, self.num_lane_classes)
 
     def compute_loss(self, logits, targets):

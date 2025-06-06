@@ -120,7 +120,12 @@ def main():
 
             download_image_batch(cap_ids, IMAGE_DIR)
 
-            ds = LaneDetectionDataset(data_root=DATA_DIR, mode="predict", seg_ids=list(segs_to_pred.link_segment_id))
+            ds = LaneDetectionDataset(
+                data_root=DATA_DIR,
+                mode="predict",
+                use_prior_preds=args.use_prior_preds,
+                seg_ids=list(segs_to_pred.link_segment_id),
+            )
 
             idx_to_keys = {
                 i: s for i, s in enumerate(ds.samples)
