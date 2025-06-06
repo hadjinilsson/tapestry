@@ -95,7 +95,7 @@ class LaneDetectionDataset(Dataset):
 
         # Build index of samples (link_segment_id, geometry length)
         if self.mode == "predict":
-            self.samples, self.seg_ids = self._build_sample_index(pred_dist)
+            self.samples, self.seg_ids = self._build_sample_index()
         else:
             df_samples = df_segs[df_segs.is_training]
             if seg_ids is not None:
