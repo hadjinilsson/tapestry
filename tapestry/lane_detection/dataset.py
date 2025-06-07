@@ -128,8 +128,12 @@ class LaneDetectionDataset(Dataset):
         for seg_id in seg_ids:
             seg = self.link_segments.loc[seg_id]
             seg_len = seg["length_proj"]
+            is_last = seg['segment_ix_vu'] == 0
             num_samples = max(int(seg_len // self.pred_dist), 1)
-            ds = np.linspace(0, seg_len, num=num_samples, endpoint=False)
+            if not is_last:
+                ds = np.linspace(0, seg_len, num=num_samples, endpoint=False)
+            else:
+                ds = np.linspace(0, seg_len, num=num_samples)
             for d in ds:
                 sample_index.append((seg_id, d))
         return sample_index, seg_ids
@@ -218,14 +222,19 @@ class LaneDetectionDataset(Dataset):
         if self.mode == "predict":
             seg_id, dist_along = self.samples[idx]
             seg = self.link_segments.loc[seg_id]
+            seg_len = seg['length_proj']
         else:
             seg_id = self.samples[idx]
             seg = self.link_segments.loc[seg_id]
-            dist_along = random.uniform(0.0, seg["length_proj"])
+            seg_len = seg['length_proj']
+            if seg_len >= 3.0:
+                margin = 1.0
+            else:
+                margin = seg_len / 3.0
+            dist_along = random.uniform(margin, seg_len - margin)
 
         # Get link segment data
         seg_geom = seg['geom_proj']
-        seg_len = seg['length_proj']
         link_id = seg['link_id']
 
         sample_point = seg_geom.interpolate(dist_along)
